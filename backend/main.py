@@ -26,8 +26,8 @@ def root():
     }
 
 
-@app.get("/health")
-def health():
+@app.get("/healthz")
+def healthz():
     return {
         "status": "ok"
     }

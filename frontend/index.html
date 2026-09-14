@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NetGuard AI</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <main class="container">
+
+        <header>
+            <div class="logo">NG</div>
+
+            <div>
+                <h1>NetGuard AI</h1>
+                <p>AI-powered Network & System Incident Response Copilot</p>
+            </div>
+        </header>
+
+        <section class="card">
+
+            <h2>Analyze an Incident</h2>
+
+            <p class="description">
+                Paste a network log, system log, alert, or error message below.
+            </p>
+
+            <textarea
+                id="logInput"
+                placeholder="Example: ERROR: Connection timeout while connecting to server 192.168.1.50"
+            ></textarea>
+
+            <button id="analyzeButton">
+                Analyze Incident
+            </button>
+
+            <p id="status"></p>
+
+        </section>
+
+        <section id="results" class="results hidden">
+
+            <div class="result-header">
+                <h2>Incident Analysis</h2>
+                <span id="severityBadge"></span>
+            </div>
+
+            <div class="result-card">
+                <h3>Summary</h3>
+                <p id="summary"></p>
+            </div>
+
+            <div class="result-card">
+                <h3>Likely Root Cause</h3>
+                <p id="likelyCause"></p>
+            </div>
+
+            <div class="result-card">
+                <h3>Evidence</h3>
+                <ul id="evidence"></ul>
+            </div>
+
+            <div class="result-card">
+                <h3>Recommended Actions</h3>
+                <ul id="recommendations"></ul>
+            </div>
+
+        </section>
+
+    </main>
+
+    <script src="app.js"></script>
+
+</body>
+</html>

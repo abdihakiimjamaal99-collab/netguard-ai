@@ -84,3 +84,148 @@ def analyze_log(log_text: str) -> dict:
         "evidence": evidence,
         "recommendations": recommendations,
     }
+
+import json
+import os
+
+from dotenv import load_dotenv
+from openai import OpenAI
+
+
+load_dotenv()
+
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+NVIDIA_MODEL = os.getenv(
+    "NVIDIA_MODEL",
+    "nvidia/nemotron-3.5-lightning-30b-a3b",
+)
+NVIDIA_BASE_URL = os.getenv(
+    "NVIDIA_BASE_URL",
+    "https://integrate.api.nvidia.com/v1",
+)
+
+
+def get_client():
+    if not NVIDIA_API_KEY:
+        raise RuntimeError(
+            "NVIDIA_API_KEY was not found. "
+            "Add it to the .env file and restart the backend."
+        )
+
+    return OpenAI(
+        api_key=NVIDIA_API_KEY,
+        base_url=NVIDIA_BASE_URL,
+    )
+
+
+def extract_json(content: str) -> dict:
+    content = content.strip()
+
+    if content.startswith("```"):
+        content = content.replace("```json", "").replace("```", "").strip()
+
+    start = content.find("{")
+    end = content.rfind("}")
+
+    if start == -1 or end == -1:
+        raise ValueError("The AI response did not contain valid JSON.")
+
+    return json.loads(content[start:end + 1])
+
+
+def analyze_log(log_text: str) -> dict:
+    client = get_client()
+
+    system_prompt = """
+You are NetGuard AI, an expert network and system incident-response copilot.
+
+Analyze the submitted technical log carefully.
+
+Return ONLY valid JSON using exactly this structure:
+
+{
+  "severity": "low",
+  "summary": "short incident summary",
+  "likely_cause": "most likely technical root cause",
+  "evidence": [
+    "specific evidence from the submitted log"
+  ],
+  "recommendations": [
+    "safe troubleshooting action"
+  ]
+}
+
+Rules:
+- severity must be exactly one of:
+  low, medium, high, critical
+- Base conclusions on evidence in the submitted log.
+- Do not invent IP addresses, services, errors, or events.
+- Clearly distinguish symptoms from likely root causes.
+- Recommendations must be safe and practical.
+- Do not return markdown.
+- Do not return text before or after the JSON.
+"""
+
+    response = client.chat.completions.create(
+        model=NVIDIA_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": f"Analyze this log:\n\n{log_text}",
+            },
+        ],
+        temperature=0.2,
+        max_tokens=1200,
+        extra_body={
+            "chat_template_kwargs": {
+                "enable_thinking": False
+            }
+        },
+    )
+
+    content = response.choices[0].message.content
+
+    if not content:
+        raise RuntimeError("NVIDIA returned an empty response.")
+
+    result = extract_json(content)
+
+    allowed_severities = {"low", "medium", "high", "critical"}
+
+    severity = str(result.get("severity", "medium")).lower()
+
+    if severity not in allowed_severities:
+        severity = "medium"
+
+    evidence = result.get("evidence", [])
+    recommendations = result.get("recommendations", [])
+
+    if not isinstance(evidence, list):
+        evidence = [str(evidence)]
+
+    if not isinstance(recommendations, list):
+        recommendations = [str(recommendations)]
+
+    return {
+        "severity": severity,
+        "summary": str(
+            result.get(
+                "summary",
+                "The incident was analyzed by NetGuard AI."
+            )
+        ),
+        "likely_cause": str(
+            result.get(
+                "likely_cause",
+                "The root cause could not be determined with confidence."
+            )
+        ),
+        "evidence": [str(item) for item in evidence],
+        "recommendations": [
+            str(item) for item in recommendations
+        ],
+    }

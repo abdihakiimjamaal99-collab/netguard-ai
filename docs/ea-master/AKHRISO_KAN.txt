@@ -1,0 +1,19 @@
+╔══════════════════════════════════════════════════════════════╗
+║  AKHRISO KAN — EA v1.12 (cusub) — Abdihakiim Jamaal         ║
+╚══════════════════════════════════════════════════════════════╝
+
+FAYLKA: EA_BOT_ABDIHAKIIM_JAMAAL_MASTER_v112.mq5  (+ F7 → .ex5)
+
+KA BEDDEL v1.11 → v112:
+  1) Ka saar chart-ka v111
+  2) Compile / geli v112
+  3) AutoTrading ON — M1 ama M15 OK
+
+MAXAA LA SAXAY:
+  • Chart/M1 flow follow (ma aha HTF BUY inta M1 dhacayo)
+  • Serial continuation adds (BE+/1R + pullback; max 2; no DD add)
+  • Instant reverse on flip (no cooldown / same tick)
+  • IDLE-WATCHDOG 20 bars + $5 SL + BE/peak lock
+  • BUY iyo SELL labadaba — isla logic mirror (X-space)
+
+© Abdihakiim Jamaal

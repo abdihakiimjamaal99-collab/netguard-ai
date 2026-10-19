@@ -1,17 +1,20 @@
 //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-//!!  MJ-MASTER VERSION 1.15d — LATEST FIX BUILD — 2026-10-19       !!
-//!!  v1.15d NO SELF-LOCK (Abdi 16:12: DAY LOCKED 53/12 on BULL):  !!
-//!!   BUG: RefreshDailyStats counted ALL same-magic History today  !!
-//!!   FIX: count only THIS instance entries since OnInit            !!
-//!!        hard MaxTrades/day default OFF; soft rolling 60m throttle!!
-//!!        lock reason + auto-release time on dashboard             !!
-//!!  Keep: Killer PB gate | BE lock | Scalp/CONT OFF | BUY+SELL    !!
+//!!  MJ-MASTER VERSION 1.15e — LATEST FIX BUILD — 2026-10-19       !!
+//!!  v1.15e: Abdi UNI SELL @4159.16 LOW + "I never see BUY" + zones!!
+//!!   BUG1: TryOpen skipped late-chase if reason contained "retest" !!
+//!!   BUG2: extension stuck on leg high; no real-retrace confirm    !!
+//!!   BUG3: flow UP lagged (needed 6-bar reclaim) → BUY always idle !!
+//!!   BUG4: single armed zone; cooldown after TP/flip left idle gap !!
+//!!   FIX: ALL eng late-chase; real retrace+reject; fast UP flip;   !!
+//!!        BUY+SELL zones armed together; enter on zone retest;     !!
+//!!        TP→next opposite zone (≥1.5R)+BE trail; cooldown=SL only!!
+//!!  Keep: no self-lock | BE lock | $5 SL | BUY+SELL               !!
 //!!  Haddii aad aragto sadarkan, waa version-ka ugu dambeeyay      !!
 //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 //+------------------------------------------------------------------+
 //|                              EA_BOT_ABDIHAKIIM_JAMAAL_MASTER.mq5 |
 //|                     Unified master EA  -  Abdihakiim Jamaal      |
-//|  *** VERSION 1.15d — no history self-lock + soft throttle ***
+//|  *** VERSION 1.15e — zones + real retest + BUY/SELL parity ***
 //+------------------------------------------------------------------+
 //|  Single-file MetaTrader 5 Expert Advisor.                        |
 //|                                                                  |
@@ -35,7 +38,7 @@
 #property version     "1.15"
 #property description "Unified MT5 EA: ICT Unicorn + Killer Start + Multi-tier Scalp + 5-in-1 Book engine."
 #property description "One central entry gate, per-symbol profiles, strict SL-based risk, send reconciliation,"
-#property description "v1.15d: no History self-lock; session counters + soft throttle. Single file."
+#property description "v1.15e: dual zone retest BUY+SELL; real retrace; fast UP flow; SL-only cooldown."
 #property strict
 
 //==================================================================
@@ -116,15 +119,18 @@ input bool              InpRequireCandleFlow   = true;            // Entry dir m
 input ENUM_ENTRY_MODE   InpEntryMode           = ENTRY_BALANCED;  // Entry aggressiveness (v1.15: fewer but better)
 input ENUM_TRADE_DIRECTION InpTradeDirection   = TRADE_BOTH;      // Trade direction filter
 input bool              InpAllowCounterTrend   = false;           // Allow entries against chart flow (default OFF)
-input bool              InpUseContinuationFallback = false;       // Impulse CONT (v1.15b OFF — live IMP −$7.7)
-input int               InpContWaitBars        = 4;               // Bars of clear chart bias before continuation
+input bool              InpUseContinuationFallback = true;        // CONT ON but pullback-only (v1.15e — idle fix)
+input int               InpContWaitBars        = 2;               // Bars of clear chart bias before continuation
 input double            InpPullbackMaxATR      = 2.0;             // Pullback deeper than N×Exec ATR → WAIT (no counter)
-input double            InpMaxExtensionATR     = 1.5;             // Late-chase veto: no impulse entry if >N×ATR from swing extreme
+input double            InpMaxExtensionATR     = 1.5;             // Late-chase: block impulse-at-extreme if >N×ATR from origin
 input bool              InpPreferPullbackEntry = true;            // Prefer EMA/BOS pullback-retest over impulse-at-extreme
-input double            InpMinInitialRR        = 1.8;             // Soft RR / expectancy floor: TP ≥ N×SL (avg-win ≥ avg-loss target)
+input double            InpExtremeProximityATR = 0.35;            // v1.15e: still "at extreme" if within N×ATR of impulse low/high
+input double            InpMinRetraceATR       = 0.40;            // v1.15e: real retest needs ≥N×ATR bounce from extreme first
+input bool              InpBlockDispExhaustBar = true;            // v1.15e: no entry on huge bar closed at its extreme
+input double            InpMinInitialRR        = 1.5;             // Soft RR floor: TP ≥ N×SL (v1.15e min 1.5R → opposite zone)
 input double            InpTPATRExtension      = 1.5;             // ATR multiple floor for TP when structure is near
-input int               InpMinEntryQuality     = 70;              // Min entry location quality 0–100 (Aggressive lowers)
-input int               InpFlowAlignQualityFloor = 58;            // With chart-flow: floor quality score (v1.15 tighter)
+input int               InpMinEntryQuality     = 62;              // Min entry quality (v1.15e: allow PB entries)
+input int               InpFlowAlignQualityFloor = 55;            // With chart-flow: floor quality score
 input int               InpMaxPositions        = 1;               // Max positions (v1.15 default 1; set 2 for serial-add)
 input double            InpAddAfterR           = 1.0;             // Same-dir add only after open ticket ≥ this R (or BE+)
 input bool              InpAllowHedge          = false;           // Allow opposite position while one is open (never for flip — close first)
@@ -134,10 +140,10 @@ input bool              InpReverseOnFlowFlip   = true;            // Exit + reve
 input bool              InpFlipEnterImmediate  = false;           // After flip exit, enter opposite same bar (v1.15 OFF — less whipsaw)
 input int               InpFlipChopBars        = 10;              // Chop window (chart bars; v1.15 tighter)
 input int               InpChopPauseBars       = 20;              // Pause entries after chop (chart bars)
-input int               InpChopFlipMin         = 2;               // Pause when ≥N flow flips inside ChopBars (was hard 3)
-input bool              InpUseRangeChopFilter  = true;            // Block entries in compressed/range chop
+input int               InpChopFlipMin         = 3;               // Pause when ≥N flips (v1.15e: was 2 — blocked BUY after UP flip)
+input bool              InpUseRangeChopFilter  = true;            // Block entries in compressed/range chop (skip if clear flow)
 input int               InpRangeChopBars       = 24;              // Lookback bars for range-chop filter
-input double            InpRangeChopMaxATR     = 2.2;             // If (high-low) ≤ N×ATR → range chop (block)
+input double            InpRangeChopMaxATR     = 1.6;             // Tighter compress detect; clear flow skips chop
 input bool              InpHardBlockChopCooldown = true;          // v1.15: CHOP + loss-cooldown NEVER soft-bypassed
 input double            InpMinExpectancyRR     = 1.0;             // Require TP distance ≥ N×SL before send (1=avg win≥avg loss)
 input int               InpIdleWatchBars       = 0;               // IDLE-WATCHDOG relax (0=OFF — v1.15: was forcing weak entries)
@@ -160,7 +166,7 @@ input ENUM_TP_MODE      InpTPMode              = TP_TRAIL;        // Profit exit
 input double            InpTakeProfitR         = 0.0;             // Fixed TP in R (used when TPMode=Fixed R; 0 = none)
 input double            InpDailyMaxLossPct     = 0.0;             // Daily max loss % (0 = OFF — no DAY LOCK)
 input int               InpMaxTradesPerDay     = 0;               // HARD max entries/day (v1.15d default OFF — Abdi no self-lock)
-input int               InpMaxTradesRolling    = 8;               // Soft throttle: max entries in rolling window (0=off)
+input int               InpMaxTradesRolling    = 6;               // Soft throttle ~1-3/hr target on M1 gold (0=off)
 input int               InpMaxTradesRollingMin = 60;              // Soft throttle window minutes
 input int               InpMaxConsecLosses     = 0;               // HARD consec-loss day lock (v1.15d OFF — was History-bug)
 input int               InpCooldownAfterLossMin= 8;               // Cooldown after loss minutes (v1.15 ON; 0=OFF)
@@ -174,13 +180,13 @@ input bool              InpEnableKiller        = true;            // ICT Killer 
 input int               InpPrioKiller          = 2;               // Killer priority
 input bool              InpKillerPullbackOnly  = true;            // v1.15c: K = EMA/structure pullback ONLY (no impulse disp)
 input bool              InpKillerRequireFlow   = true;            // v1.15c: K dir must match chart candle flow
-input bool              InpKillerRequireStruct = true;            // v1.15c: require HH/HL or LH/LL (no naked impulse)
-input bool              InpKillerRequireMSS    = true;            // v1.15c: need liquidity run / micro MSS reclaim
+input bool              InpKillerRequireStruct = false;           // v1.15e: allow EMA PB without full HH/HL (idle fix)
+input bool              InpKillerRequireMSS    = false;           // v1.15e: EMA/PB path OK without sweep (idle fix)
 input bool              InpEnableBook          = true;            // 5-in-1 Book engine
 input int               InpPrioBook            = 4;               // Book priority
 input ENUM_BOOK_MODE    InpBookMode            = BOOK_AUTO;       // Book mode
-input double            InpMinBookScore        = 1.4;             // Book: minimum score to trade (stricter)
-input bool              InpEnableScalp         = false;           // Multi-tier scalp (v1.15b OFF — live 0/4, −$7)
+input double            InpMinBookScore        = 1.35;            // Book: minimum score to trade
+input bool              InpEnableScalp         = true;            // Scalp ON pullback-gated (v1.15e; late-chase applies)
 input int               InpPrioScalp           = 3;               // Scalp priority (lower = fires sooner; Book is 4)
 input double            InpScalpMaxSLATR       = 2.0;             // Scalp: max SL distance (x ATR exec TF)
 input int               InpStructLookback      = 80;              // Structure lookback (bars, exec TF)
@@ -239,7 +245,8 @@ input bool              InpUseStructureTrail   = true;            // Trail behin
 input bool              InpTrailAfter1RAlways  = true;            // After 1R peak: trail even if BE modify lagged
 input int               InpTrailSwingStrength  = 2;               // Structure trail swing strength
 input int               InpTrailStepOverride   = 0;               // Min SL improvement step points (0 = profile)
-input double            InpPartialClosePct     = 40.0;            // Partial close % at 1R (v1.15: bank wins; 0=off)
+input double            InpPartialClosePct     = 0.0;             // Partial @1R OFF (v1.15e: ride full leg via trail)
+input bool              InpClearTPWhenFlowStrong = true;          // v1.15e: TRAIL+strong flow → far TP or 0 (no scratch)
 input int               InpStaleExitBars       = 12;              // Close near-BE if no progress after N bars (0 = off)
 input double            InpStaleMaxR           = 0.15;            // Max |profit| in R to treat as stale
 
@@ -276,14 +283,14 @@ input color             InpTPColor             = clrLime;         // Placement T
 //  SECTION 2 : STRUCTS & GLOBALS
 //==================================================================
 #define EA_NAME        "MJ-MASTER"
-#define EA_VER         "1.15d"
+#define EA_VER         "1.15e"
 #define EA_AUTHOR      "Abdihakiim Jamaal"
 #define DASH_W_PX      560
 #define DASH_LINE_H    16
 #define AN_PREFIX      "AN_"
 #define SEND_RING      16
 #define NO_CAND        (-1.0e300)
-#define DASH_FIXED_LINES 20
+#define DASH_FIXED_LINES 22
 #define ATR_PERIOD     14
 
 //--- symbol profile -------------------------------------------------
@@ -505,13 +512,25 @@ string            g_prefix          = "";
 int               g_dashTicketLines = 2;
 int               g_dashLines       = 0;
 
-// chart analysis / visuals
+// chart analysis / visuals — v1.15e: BUY + SELL zones armed together
+bool              g_zoneBuyActive   = false;
+double            g_zoneBuyTop      = 0.0;
+double            g_zoneBuyBot      = 0.0;
+string            g_zoneBuyName     = "";
+string            g_zoneBuyWhy      = "";
+bool              g_zoneSellActive  = false;
+double            g_zoneSellTop     = 0.0;
+double            g_zoneSellBot     = 0.0;
+string            g_zoneSellName    = "";
+string            g_zoneSellWhy     = "";
+// legacy single-zone aliases (last SetArmedZone for dash compatibility)
 bool              g_zoneActive      = false;
 double            g_zoneTop         = 0.0;
 double            g_zoneBot         = 0.0;
 int               g_zoneDir         = 0;
 string            g_zoneName        = "";
 string            g_zoneWhy         = "";
+bool              g_zoneScanImmediate = false; // after TP/lock/flip — scan both dirs now
 int               g_lastSigDir      = 0;
 string            g_lastSigEngine   = "";
 string            g_lastSigReason   = "";
@@ -530,11 +549,15 @@ string            g_lastQualityWhy  = "";
 double            g_lastRiskMoney   = 0.0;    // USD risk of last proposal/entry
 // Gate funnel stats (dashboard)
 int               g_statPropose     = 0;
+int               g_statPropBuy     = 0;      // v1.15e per-direction
+int               g_statPropSell    = 0;
 int               g_statDropRR      = 0;      // legacy hard-RR drops (should stay 0 in v1.13)
 int               g_statDropQuality = 0;
 int               g_statDropOther   = 0;
 int               g_statDropFlow    = 0;
 int               g_statExecuted    = 0;
+int               g_statExecBuy     = 0;      // v1.15e per-direction
+int               g_statExecSell    = 0;
 int               g_statRRSoftExt   = 0;      // trend RR soft → TP extended
 string            g_lastDropReason  = "";
 string            g_liveActionTag   = "";     // e.g. "SELL ACTIVE (flow BEAR)"
@@ -544,7 +567,11 @@ void NoteGatePropose(const int dir, const string engine);
 
 // forward declarations (used by engines / gate before the analysis section)
 void ClearArmedZone();
+void ClearArmedZoneDir(const int dir);
 void SetArmedZone(const int dir, const double xTop, const double xBot, const string name, const string why);
+bool ZoneActive(const int dir);
+bool GetArmedZonePrices(const int dir, double &top, double &bot, string &name);
+bool TryArmedZoneRetest(const int dir, string &why, double &slOut);
 void RecordChartSignal(const int dir, const string engine, const string reason, const bool taken, const double sl);
 void UpdateChartAnalysis(const bool force);
 void AnalysisDelete();
@@ -591,6 +618,8 @@ bool TrendFlowAligned(const int dir)
 void NoteGatePropose(const int dir, const string engine)
   {
    g_statPropose++;
+   if(dir > 0) g_statPropBuy++;
+   else if(dir < 0) g_statPropSell++;
    if(dir < 0) g_liveActionTag = "SELL ACTIVE (flow " + g_flowTag + ") via " + engine;
    else if(dir > 0) g_liveActionTag = "BUY ACTIVE (flow " + g_flowTag + ") via " + engine;
   }
@@ -1013,8 +1042,9 @@ string FlowTag(const int f)
    return "FLAT";
   }
 
-// Last 2–3 closed candles on tf: body direction majority + EMA slope
-// v1.14: fast flip on micro CHoCH/reclaim so BUY bounce is not stuck waiting "flow UP"
+// Chart TF flow — MIRRORED BUY/SELL (v1.15e). Fast flip so BUY is not stuck on lagging DOWN.
+// UP: higher-low + close>EMA, micro-BOS above bar2, or strong up displacement.
+// DOWN: lower-high + close<EMA, micro-BOS below bar2, or strong down displacement.
 int CandleFlowTF(const ENUM_TIMEFRAMES tf, const int handle)
   {
    MqlRates r[];
@@ -1031,20 +1061,27 @@ int CandleFlowTF(const ENUM_TIMEFRAMES tf, const int handle)
    if(up >= 2 && up > dn) flow = 1;
    else if(dn >= 2 && dn > up) flow = -1;
 
-   // ATR for reclaim threshold
    double atr = 0.0;
    for(int k = 1; k <= 5; k++) atr += (r[k].high - r[k].low);
    atr /= 5.0;
    if(atr <= 0.0) atr = _Point * 50.0;
-   // Micro CHoCH / reclaim: bar1 closes beyond prior 3–6 extreme with body — flip immediately
+
    double priorHi = r[2].high, priorLo = r[2].low;
    for(int k = 3; k <= 6 && k < n; k++)
      { if(r[k].high > priorHi) priorHi = r[k].high; if(r[k].low < priorLo) priorLo = r[k].low; }
    double body1 = r[1].close - r[1].open;
-   if(body1 >= 0.30 * atr && r[1].close > priorHi)
-      flow = 1;   // bullish reclaim → UP (BUY path)
-   else if(body1 <= -0.30 * atr && r[1].close < priorLo)
-      flow = -1;  // bearish break → DOWN (SELL path)
+
+   // Full 3–6 bar reclaim (strong)
+   if(body1 >= 0.30 * atr && r[1].close > priorHi) flow = 1;
+   else if(body1 <= -0.30 * atr && r[1].close < priorLo) flow = -1;
+
+   // v1.15e FAST flip (mirror): micro-BOS vs prior bar — unblocks BUY after 4159 low
+   if(body1 >= 0.22 * atr && r[1].close > r[2].high) flow = 1;
+   else if(body1 <= -0.22 * atr && r[1].close < r[2].low) flow = -1;
+
+   // Strong single-bar displacement
+   if(body1 >= 0.50 * atr && r[1].close > r[1].open) flow = 1;
+   else if(body1 <= -0.50 * atr && r[1].close < r[1].open) flow = -1;
 
    double ema1 = 0.0, ema3 = 0.0; bool haveE = false;
    double e[];
@@ -1063,9 +1100,15 @@ int CandleFlowTF(const ENUM_TIMEFRAMES tf, const int handle)
       bool slopeDn = (ema1 < ema3);
       bool sideUp  = (r[1].close > ema1);
       bool sideDn  = (r[1].close < ema1);
-      // Do not cancel a strong reclaim flip just because EMA lag disagrees
-      bool strongFlip = (MathAbs(body1) >= 0.30 * atr &&
-                         ((flow > 0 && r[1].close > priorHi) || (flow < 0 && r[1].close < priorLo)));
+      // Higher-low + close above EMA → UP; lower-high + close below EMA → DOWN (mirrored)
+      bool higherLow = (r[1].low >= r[2].low - 0.05 * atr) && (r[1].low > r[3].low);
+      bool lowerHigh = (r[1].high <= r[2].high + 0.05 * atr) && (r[1].high < r[3].high);
+      if(higherLow && sideUp && body1 > 0.0) flow = 1;
+      if(lowerHigh && sideDn && body1 < 0.0) flow = -1;
+
+      bool strongFlip = (MathAbs(body1) >= 0.22 * atr &&
+                         ((flow > 0 && (r[1].close > r[2].high || r[1].close > priorHi)) ||
+                          (flow < 0 && (r[1].close < r[2].low  || r[1].close < priorLo))));
       if(!strongFlip)
         {
          if(flow > 0 && slopeDn && sideDn) flow = 0;
@@ -1224,8 +1267,7 @@ double PullbackDepthATR(const int htfDir)
    return (px - lo) / atr;
   }
 
-// How far price has run in `dir` from the opposite swing extreme (late-chase meter).
-// SELL: (recentHigh - price)/ATR; BUY: (price - recentLow)/ATR.
+// Impulse origin extension (leg high→price for SELL / price→leg low for BUY).
 double TrendExtensionATR(const int dir)
   {
    if(dir == 0) return 0.0;
@@ -1240,24 +1282,172 @@ double TrendExtensionATR(const int dir)
    if(dir < 0)
      {
       double hi = r[1].high;
-      for(int k = 2; k <= 16; k++) if(r[k].high > hi) hi = r[k].high;
+      for(int k = 2; k <= 20; k++) if(r[k].high > hi) hi = r[k].high;
       return (hi - px) / atr;
      }
    double lo = r[1].low;
-   for(int k = 2; k <= 16; k++) if(r[k].low < lo) lo = r[k].low;
+   for(int k = 2; k <= 20; k++) if(r[k].low < lo) lo = r[k].low;
    return (px - lo) / atr;
   }
 
-// True when impulse-at-extreme should be rejected (prefer pullback/retest instead)
+// Impulse extreme + how far price has retraced from it (v1.15e).
+// SELL: extreme = lowest low of last lookback after originating high; retrace = bounce up from that low.
+// BUY:  extreme = highest high; retrace = pullback down from that high.
+bool ImpulseExtremeStats(const int dir, double &extPrice, double &distExtATR, double &retraceATR, int &extBar)
+  {
+   extPrice = 0.0; distExtATR = 0.0; retraceATR = 0.0; extBar = -1;
+   if(dir == 0) return false;
+   MqlRates r[];
+   int n = LoadRates(g_tf, 48, r);
+   if(n < 16) return false;
+   double atr = ATRBaseline(8);
+   if(atr <= 0.0) atr = ATRValue();
+   if(atr <= 0.0) return false;
+   double px = (dir > 0) ? g_ask : g_bid;
+   if(px <= 0.0) px = r[1].close;
+
+   // Find impulse extreme in bars 1..24
+   int look = 24; if(look > n - 2) look = n - 2;
+   if(dir < 0)
+     {
+      // SELL leg: lowest low
+      double lo = r[1].low; int loI = 1;
+      for(int k = 2; k <= look; k++) if(r[k].low < lo) { lo = r[k].low; loI = k; }
+      // Origin high before/at extreme window
+      double hi = r[loI].high;
+      for(int k = loI; k <= look; k++) if(r[k].high > hi) hi = r[k].high;
+      // Need meaningful drop to call it an impulse extreme
+      if((hi - lo) < 0.80 * atr) return false;
+      extPrice = lo; extBar = loI;
+      distExtATR = (px - lo) / atr; if(distExtATR < 0.0) distExtATR = 0.0;
+      // Max bounce after extreme (bars 1..loI)
+      double bounceHi = r[1].high;
+      for(int k = 1; k <= loI; k++) if(r[k].high > bounceHi) bounceHi = r[k].high;
+      retraceATR = (bounceHi - lo) / atr;
+      if(retraceATR < 0.0) retraceATR = 0.0;
+      return true;
+     }
+   // BUY leg: highest high
+   double hi2 = r[1].high; int hiI = 1;
+   for(int k = 2; k <= look; k++) if(r[k].high > hi2) { hi2 = r[k].high; hiI = k; }
+   double lo2 = r[hiI].low;
+   for(int k = hiI; k <= look; k++) if(r[k].low < lo2) lo2 = r[k].low;
+   if((hi2 - lo2) < 0.80 * atr) return false;
+   extPrice = hi2; extBar = hiI;
+   distExtATR = (hi2 - px) / atr; if(distExtATR < 0.0) distExtATR = 0.0;
+   double bounceLo = r[1].low;
+   for(int k = 1; k <= hiI; k++) if(r[k].low < bounceLo) bounceLo = r[k].low;
+   retraceATR = (hi2 - bounceLo) / atr;
+   if(retraceATR < 0.0) retraceATR = 0.0;
+   return true;
+  }
+
+// Huge displacement bar that closed at its extreme → wait (Abdi: SELL into close-at-low)
+bool DisplacementExhaustionBar(const int dir, string &why)
+  {
+   why = "";
+   if(!InpBlockDispExhaustBar || dir == 0) return false;
+   MqlRates r[];
+   if(LoadRates(g_tf, 6, r) < 3) return false;
+   double atr = ATRBaseline(8);
+   if(atr <= 0.0) atr = ATRValue();
+   if(atr <= 0.0) return false;
+   double rng = r[1].high - r[1].low;
+   if(rng < 0.55 * atr) return false;
+   double body = MathAbs(r[1].close - r[1].open);
+   if(body < 0.45 * atr) return false;
+   // close in extreme 25% of range
+   if(dir < 0)
+     {
+      double pos = (r[1].close - r[1].low) / rng; // 0=at low
+      if(pos <= 0.25 && r[1].close < r[1].open)
+        { why = "disp-exhaust SELL bar closed at low — wait retrace"; return true; }
+     }
+   else
+     {
+      double pos = (r[1].high - r[1].close) / rng; // 0=at high
+      if(pos <= 0.25 && r[1].close > r[1].open)
+        { why = "disp-exhaust BUY bar closed at high — wait retrace"; return true; }
+     }
+   return false;
+  }
+
+// Real retest: bounced ≥ MinRetraceATR from extreme, then rejection candle back with trend
+bool HasConfirmedRetraceRetest(const int dir, string &why)
+  {
+   why = "";
+   double extP = 0.0, distE = 0.0, retA = 0.0; int extB = -1;
+   if(!ImpulseExtremeStats(dir, extP, distE, retA, extB))
+     { why = "no impulse leg"; return false; }
+   double need = (InpMinRetraceATR > 0.0) ? InpMinRetraceATR : 0.40;
+   if(retA < need)
+     {
+      why = StringFormat("retrace only %.2fATR < min %.2f — not a real retest yet", retA, need);
+      return false;
+     }
+   MqlRates r[];
+   if(LoadRates(g_tf, 8, r) < 3) return false;
+   double atr = ATRBaseline(8);
+   if(atr <= 0.0) atr = ATRValue();
+   // Rejection candle with trend (SELL: bearish close + upper wick; BUY: bullish + lower wick)
+   double rng = r[1].high - r[1].low;
+   if(rng <= 0.0) return false;
+   if(dir < 0)
+     {
+      bool bear = (r[1].close < r[1].open);
+      double upper = r[1].high - MathMax(r[1].open, r[1].close);
+      if(!(bear && upper >= 0.25 * rng && r[1].close < r[1].high - 0.35 * rng))
+        { why = "need SELL rejection candle after retrace"; return false; }
+     }
+   else
+     {
+      bool bull = (r[1].close > r[1].open);
+      double lower = MathMin(r[1].open, r[1].close) - r[1].low;
+      if(!(bull && lower >= 0.25 * rng && r[1].close > r[1].low + 0.35 * rng))
+        { why = "need BUY rejection candle after retrace"; return false; }
+     }
+   why = StringFormat("confirmed retest ret=%.2fATR", retA);
+   return true;
+  }
+
+// True when entry must wait — applies to ALL engines (v1.15e)
 bool LateChaseBlocked(const int dir, string &why)
   {
    why = "";
-   if(!InpPreferPullbackEntry || InpMaxExtensionATR <= 0.0 || dir == 0) return false;
-   double ext = TrendExtensionATR(dir);
-   if(ext > InpMaxExtensionATR)
+   if(dir == 0) return false;
+
+   // 1) Exhaustion displacement bar at extreme
+   string exh = "";
+   if(DisplacementExhaustionBar(dir, exh))
+     { why = exh; return true; }
+
+   // 2) Still glued to impulse extreme without real retrace (Abdi UNI SELL @4159.16)
+   double extP = 0.0, distE = 0.0, retA = 0.0; int extB = -1;
+   double prox = (InpExtremeProximityATR > 0.0) ? InpExtremeProximityATR : 0.35;
+   double needRet = (InpMinRetraceATR > 0.0) ? InpMinRetraceATR : 0.40;
+   if(ImpulseExtremeStats(dir, extP, distE, retA, extB))
      {
-      why = StringFormat("late-chase %.1fATR > max %.1f — wait pullback/retest", ext, InpMaxExtensionATR);
-      return true;
+      // Still glued to impulse high/low → always wait (even if an earlier bounce printed)
+      if(distE <= prox)
+        {
+         why = StringFormat("at-impulse-extreme dist=%.2fATR retrace=%.2f — leave extreme first (need ≥%.2fATR then reject)",
+                            distE, retA, needRet);
+         return true;
+        }
+     }
+
+   // 3) Origin extension late-chase — BUT allow if confirmed retrace+rejection exists
+   if(InpPreferPullbackEntry && InpMaxExtensionATR > 0.0)
+     {
+      double ext = TrendExtensionATR(dir);
+      if(ext > InpMaxExtensionATR)
+        {
+         string conf = "";
+         if(HasConfirmedRetraceRetest(dir, conf))
+            return false; // real pullback/retest into the leg — OK
+         why = StringFormat("late-chase %.1fATR > max %.1f — wait pullback/retest", ext, InpMaxExtensionATR);
+         return true;
+        }
      }
    return false;
   }
@@ -1424,23 +1614,41 @@ int EffectiveMaxPositions(const int forDir)
 
 double NearestTargetDist(const int dir, const double price)
   {
+   double best = 0.0;
+   // v1.15e: prefer next OPPOSING armed zone (BUY → sell/supply zone; SELL → buy/demand)
+   if(dir > 0 && g_zoneSellActive && g_zoneSellBot > price)
+     {
+      double z = 0.5 * (g_zoneSellTop + g_zoneSellBot);
+      if(z > price) best = z - price;
+     }
+   else if(dir < 0 && g_zoneBuyActive && g_zoneBuyTop < price)
+     {
+      double z = 0.5 * (g_zoneBuyTop + g_zoneBuyBot);
+      if(z < price) best = price - z;
+     }
    MqlRates r[];
    int n = LoadRates(g_tf, 50, r);
-   if(n < 20) return 0.0;
+   if(n < 20) return best;
    const int s = InpSwingStrength;
    if(dir > 0)
      {
       int h = LastXSwingHigh(r, n, s + 1, s, 1);
-      if(h < 0) return 0.0;
-      double t = r[h].high;
-      if(t <= price) return 0.0;
-      return t - price;
+      if(h >= 0)
+        {
+         double t = r[h].high;
+         if(t > price) best = MathMax(best, t - price);
+        }
      }
-   int l = LastXSwingLow(r, n, s + 1, s, 1);
-   if(l < 0) return 0.0;
-   double t = r[l].low;
-   if(t >= price) return 0.0;
-   return price - t;
+   else
+     {
+      int l = LastXSwingLow(r, n, s + 1, s, 1);
+      if(l >= 0)
+        {
+         double t = r[l].low;
+         if(t < price) best = MathMax(best, price - t);
+        }
+     }
+   return best;
   }
 
 bool PullbackConfirmed(const int dir, string &why)
@@ -3064,12 +3272,11 @@ bool UnicornScan(const MqlRates &r[], const int n, const double atr, const int d
       for(int k = m - 1; k >= 1; k--)
          if(XC(r, k, dir) < zBot) { why = DirStr(dir) + " unicorn zone invalidated"; return false; }
 
-      // 7. retest: Aggressive allows any touch+close back in zone; else mid rejection
+      // 7. retest: touch zone + close with trend; v1.15e also needs real retrace from impulse extreme
       bool tap1 = (XL(r, 1, dir) <= zTop && XC(r, 1, dir) > zBot && XC(r, 1, dir) > XO(r, 1, dir));
       if(!agg) tap1 = tap1 && (XC(r, 1, dir) >= 0.5 * (zTop + zBot));
       if(!tap1)
         {
-         // Re-arm: do not stay WAIT forever — impulse legs skip stale zones
          if(ImpulseAligned(dir) && m > 4)
            { why = DirStr(dir) + " unicorn zone stale (impulse re-arm)"; waiting = false; continue; }
          waiting = true;
@@ -3077,12 +3284,28 @@ bool UnicornScan(const MqlRates &r[], const int n, const double atr, const int d
          SetArmedZone(dir, zTop, zBot, "UNICORN", why);
          return false;
         }
+      // Fake retest at impulse LOW/HIGH (Abdi 16:36 UNI SELL @4159.16)
+      string rtWhy = "";
+      if(!HasConfirmedRetraceRetest(dir, rtWhy))
+        {
+         waiting = true;
+         why = DirStr(dir) + " unicorn zone touch but " + rtWhy;
+         SetArmedZone(dir, zTop, zBot, "UNICORN", why);
+         return false;
+        }
+      string lateU = "";
+      if(LateChaseBlocked(dir, lateU))
+        {
+         waiting = true;
+         why = DirStr(dir) + " unicorn " + lateU;
+         return false;
+        }
 
       double sweepLow = XL(r, i, dir);
       double xsl = sweepLow - atr * g_prof.slBufferATR;
-      if(zBot - sweepLow > 1.5 * atr) xsl = zBot - 0.3 * atr;   // sweep too far: anchor under the zone instead
+      if(zBot - sweepLow > 1.5 * atr) xsl = zBot - 0.3 * atr;
       slOut = XReal(xsl, dir);
-      why   = "Unicorn " + DirStr(dir) + " " + zKind + " retest";
+      why   = "Unicorn " + DirStr(dir) + " " + zKind + " retest+" + rtWhy;
       return true;
      }
    why = DirStr(dir) + " no sweep structure";
@@ -3443,6 +3666,10 @@ bool ScalpScan(const int dir, const double atr, string &why, double &slOut)
       else
         { why = "scalp: SL too wide"; return false; }
      }
+   // v1.15e: scalp must not fire at impulse extreme (pullback-only form)
+   string scLate = "";
+   if(LateChaseBlocked(dir, scLate))
+     { why = "scalp " + DirStr(dir) + " " + scLate; return false; }
    slOut = XReal(xsl, dir);
    why   = "Scalp " + DirStr(dir) + (m15Aligned ? " M15+M5 BOS+" : " pullback M5 BOS+") + t;
    return true;
@@ -4058,6 +4285,8 @@ bool IsRangeChopMarket(string &why)
   {
    why = "";
    if(!InpUseRangeChopFilter || InpRangeChopBars < 8 || InpRangeChopMaxATR <= 0.0) return false;
+   // v1.15e: clear directional flow is not chop — allow PB entries
+   if(g_candleFlow != 0) return false;
    MqlRates r[];
    int n = LoadRates(g_tf, InpRangeChopBars + 5, r);
    if(n < InpRangeChopBars) return false;
@@ -4215,21 +4444,15 @@ bool TryOpen(const SSignal &sig)
    if(SameDirOpenInDrawdown(dir))
      { NoteGateDrop("drawdown", "same-dir open in drawdown"); return false; }
 
-   // v1.14: late-chase veto for impulse-style reasons (allow pullback/retest / flip-now)
+   // v1.15e: late-chase / at-extreme / fake-retest veto for ALL engines (UNI/BOOK/KIL/IMP/SCP/flip)
+   // Abdi bug: reason containing "retest" used to skip the check → SELL @ impulse LOW
    {
     string lateWhy = "";
-    bool looksImpulse = (StringFind(sig.reason, "impulse") >= 0 ||
-                         StringFind(sig.reason, "displacement") >= 0 ||
-                         StringFind(sig.engine, "IMP") >= 0);
-    bool looksPullback = (StringFind(sig.reason, "pullback") >= 0 ||
-                          StringFind(sig.reason, "retest") >= 0 ||
-                          StringFind(sig.reason, "bounce") >= 0 ||
-                          StringFind(sig.reason, "BOS") >= 0 ||
-                          StringFind(sig.reason, "CHoCH") >= 0 ||
-                          StringFind(sig.reason, "EMA") >= 0);
-    if(looksImpulse && !looksPullback && !g_flipEnterNow && LateChaseBlocked(dir, lateWhy))
+    if(LateChaseBlocked(dir, lateWhy))
       {
-       NoteGateDrop("late-chase", lateWhy);
+       NoteGateDrop("late-chase", lateWhy + " | eng=" + sig.engine);
+       g_gateReason = "late-chase: " + lateWhy;
+       LogMsg(StringFormat("REJECT %s %s — %s", sig.engine, DirStr(dir), lateWhy), true);
        return false;
       }
    }
@@ -4358,23 +4581,42 @@ bool TryOpen(const SSignal &sig)
    double riskUsd = LossMoneyAt(lot, dist);
    g_lastRiskMoney = riskUsd;
 
-   // 4) TP = max(structure, MinInitialRR×SL, ATR extension) — even in TRAIL mode set floor TP
-   //    BE / peak-lock / ladder still manage the winner; TP is the RR floor so we never "DROP for RR"
+   // 4) TP: far opposite-zone/structure (≥1.5R). v1.15e TRAIL+strong flow → far TP or none
+   //    (ride leg via BE-lock + ladder + swing/EMA trail — no scratch fixed TP). Hard SL still $cap.
    if(InpMinInitialRR > 0.0) wantTgtPts = MathMax(wantTgtPts, InpMinInitialRR * dist);
    if(atr > 0.0 && InpTPATRExtension > 0.0) wantTgtPts = MathMax(wantTgtPts, InpTPATRExtension * atr);
    if(structTgt > wantTgtPts) wantTgtPts = structTgt;
-   // v1.15 expectancy: TP distance must be ≥ MinExpectancyRR × SL (default 1.0 → avg-win target ≥ avg-loss)
-   double expFloor = MathMax(1.0, InpMinExpectancyRR);
+   double expFloor = MathMax(1.5, InpMinExpectancyRR); // Abdi: min 1.5R toward opposite zone
    if(InpMinInitialRR > 0.0) expFloor = MathMax(expFloor, InpMinInitialRR);
    if(wantTgtPts < dist * expFloor) wantTgtPts = dist * expFloor;
-   double tp = NormPrice(price + dir * wantTgtPts);
+   double tp = 0.0;
+   bool farOk = (dist > 0.0 && wantTgtPts >= dist * 1.5);
    if(InpTPMode == TP_FIXED_R && InpTakeProfitR > 0.0)
      {
-      double tpFixed = NormPrice(price + dir * dist * InpTakeProfitR);
-      if(dir > 0) tp = MathMax(tp, tpFixed); else tp = MathMin(tp, tpFixed);
+      tp = NormPrice(price + dir * dist * InpTakeProfitR);
+      if(farOk)
+        {
+         double tpFar = NormPrice(price + dir * wantTgtPts);
+         if(dir > 0) tp = MathMax(tp, tpFar); else tp = MathMin(tp, tpFar);
+        }
+     }
+   else if(InpTPMode == TP_TRAIL)
+     {
+      if(InpClearTPWhenFlowStrong && flowOK)
+        {
+         // Strong flow: only place TP if opposite zone/structure is far (≥1.5R); else 0 = trail manages
+         if(farOk && structTgt >= dist * 1.5)
+            tp = NormPrice(price + dir * wantTgtPts);
+         else
+            tp = 0.0;
+        }
+      else
+         tp = NormPrice(price + dir * wantTgtPts);
      }
 
-   string tpTag = StringFormat("TP %.*f (%.1fR)", g_digits, tp, (dist > 0.0) ? (wantTgtPts / dist) : 0.0);
+   string tpTag = (tp > 0.0)
+                  ? StringFormat("TP %.*f (%.1fR far)", g_digits, tp, (dist > 0.0) ? (MathAbs(tp - price) / dist) : 0.0)
+                  : "TP none (TRAIL BE/ladder/swing+EMA)";
    LogMsg(StringFormat("GATE -> EXECUTE %s %s lot %.2f SL %.*f (%.0f pts) %s | risk USD %.2f cap USD %.0f | Q=%d/%d (%s) | flow %s | %s",
                        sig.engine, DirStr(dir), lot, g_digits, sl, dist / _Point, tpTag,
                        riskUsd, InpMaxLossPerTradeMoney, g_lastQuality, qMin, qWhy, g_flowTag, sig.reason), true);
@@ -4382,6 +4624,8 @@ bool TryOpen(const SSignal &sig)
    if(ok)
      {
       g_statExecuted++;
+      if(dir > 0) g_statExecBuy++;
+      else if(dir < 0) g_statExecSell++;
       g_lastEntryBar = iTime(_Symbol, g_tf, 0);
       g_engLastFire[sig.engineId] = TimeCurrent();
       RecordSessionEntry();   // v1.15d: session counter only (not History-day)
@@ -4413,7 +4657,7 @@ bool TryOpen(const SSignal &sig)
 void EvaluateEntryGate(const bool newExecBar, const bool newM1Bar)
   {
    if(g_halted || g_paused) return;
-   if(newExecBar) ClearArmedZone();   // engines re-arm the zone this bar if still valid
+   if(newExecBar) ClearArmedZone();   // engines re-arm BUY+SELL zones this bar if still valid
    // Always refresh bias before the gate decision (timer may have newer FINAL than last bar)
    g_htfBias = ComputeHTFBias();
    if(newExecBar)
@@ -4454,15 +4698,19 @@ void EvaluateEntryGate(const bool newExecBar, const bool newM1Bar)
 
    // ChartTF / live candle flow is desired. Prefer pending flip dir after FLIP EXIT.
    // v1.13: never leave desired stuck on HTF while M1 flow is clear the other way.
+   // v1.15e: after TP/lock/flip (g_zoneScanImmediate) scan BOTH dirs for zone retests
    int desired = 0;
-   if(g_pendingFlipDir != 0 && TradeDirAllows(g_pendingFlipDir))
+   if(g_zoneScanImmediate)
+      desired = 0; // either BUY or SELL zone
+   else if(g_pendingFlipDir != 0 && TradeDirAllows(g_pendingFlipDir))
       desired = g_pendingFlipDir;
    else if(g_candleFlow != 0)
       desired = g_candleFlow;
    else if(InpUseHTFBias)
       desired = g_htfBias;
-   // Dual-scan status only when truly flat (no flow, no bias, no flip)
-   const bool statusOnly = (desired == 0 && !InpAllowNeutralBias);
+   // Dual-scan: flat OR immediate zone scan after close
+   const bool statusOnly = (desired == 0 && !InpAllowNeutralBias && !g_zoneScanImmediate);
+   const bool dualZoneScan = g_zoneScanImmediate || (desired == 0);
 
    SSignal sigs[8];
    int cnt = 0;
@@ -4473,10 +4721,10 @@ void EvaluateEntryGate(const bool newExecBar, const bool newM1Bar)
       if(g_engOn[ENG_UNICORN])
         {
          bool waiting = false; string why = ""; double sl = 0.0;
-         int scanDir = statusOnly ? 0 : desired;
+         int scanDir = (statusOnly || dualZoneScan) ? 0 : desired;
          int d = UnicornEntrySignal(scanDir, waiting, why, sl);   // always fills B+S columns
          g_unicornWaiting = waiting;
-         if(!statusOnly && (newExecBar || g_flipEnterNow) && d != 0 && TradeDirAllows(d))
+         if(!statusOnly && (newExecBar || g_flipEnterNow || g_zoneScanImmediate) && d != 0 && TradeDirAllows(d))
            {
             sigs[cnt].Reset();
             sigs[cnt].valid = true; sigs[cnt].dir = d; sigs[cnt].sl = sl; sigs[cnt].score = 2.0;
@@ -4540,9 +4788,10 @@ void EvaluateEntryGate(const bool newExecBar, const bool newM1Bar)
          SSignal bs;
          if(statusOnly)
             BookEngineSignal(0, bs);
-         else if(newExecBar || g_flipEnterNow)
+         else if(newExecBar || g_flipEnterNow || g_zoneScanImmediate)
            {
-            if(BookEngineSignal(desired, bs) && TradeDirAllows(bs.dir))
+            int bookDir = dualZoneScan ? 0 : desired;
+            if(BookEngineSignal(bookDir, bs) && TradeDirAllows(bs.dir))
               {
                sigs[cnt] = bs; cnt++;
                NoteGatePropose(bs.dir, bs.engine);
@@ -4591,11 +4840,41 @@ void EvaluateEntryGate(const bool newExecBar, const bool newM1Bar)
             TryScalpEntry(0);   // status fill
         }
      }
-   // Impulse CONT: chart bars + immediate flip reverse tick
+   // v1.15e: zone retest — BUY at buy zone / SELL at sell zone when price returns (both armed)
+   if(!statusOnly && (newExecBar || newM1Bar || g_flipEnterNow || g_zoneScanImmediate) && cnt < 8)
+     {
+      for(int zd = -1; zd <= 1; zd += 2)
+        {
+         if(!TradeDirAllows(zd)) continue;
+         if(!dualZoneScan && desired != 0 && zd != desired) continue;
+         // Prefer flow match; after close-immediate allow either zone
+         if(!g_zoneScanImmediate && InpRequireCandleFlow && g_candleFlow != 0 && zd != g_candleFlow)
+            continue;
+         string zWhy = ""; double zSL = 0.0;
+         if(!TryArmedZoneRetest(zd, zWhy, zSL)) continue;
+         bool dupZ = false;
+         for(int i = 0; i < cnt; i++)
+            if(sigs[i].dir == zd && StringFind(sigs[i].reason, "ZONE retest") >= 0) dupZ = true;
+         if(dupZ) continue;
+         sigs[cnt].Reset();
+         sigs[cnt].valid = true; sigs[cnt].dir = zd; sigs[cnt].sl = zSL; sigs[cnt].score = 2.2;
+         sigs[cnt].priority = 1; sigs[cnt].engineId = ENG_BOOK;
+         sigs[cnt].engine = "ZONE"; sigs[cnt].reason = zWhy;
+         cnt++;
+         NoteGatePropose(zd, "ZONE");
+         LogMsg("PROPOSE ZONE " + DirStr(zd) + " | " + zWhy, true);
+         if(cnt >= 8) break;
+        }
+     }
+   if(g_zoneScanImmediate && (cnt > 0 || newExecBar))
+      g_zoneScanImmediate = false; // consumed this scan cycle
+
+   // Impulse CONT: chart bars + immediate flip reverse tick (needs concrete dir)
    if(!statusOnly && cnt == 0 && (newExecBar || newM1Bar || g_flipEnterNow))
      {
       SSignal cont;
-      if(TryContinuationFallback(desired, cont) && TradeDirAllows(cont.dir))
+      int contDir = (desired != 0) ? desired : g_candleFlow;
+      if(contDir != 0 && TryContinuationFallback(contDir, cont) && TradeDirAllows(cont.dir))
         {
          sigs[cnt] = cont; cnt++;
          NoteGatePropose(cont.dir, cont.engine);
@@ -4801,13 +5080,30 @@ double ProtectOpenStops(STicketProtect &tk)
   }
 
 // Structure trail: behind the last confirmed swing low/high (fractal) on the execution TF
-// v1.14: after 1R peak, trail even if BE modify lagged (InpTrailAfter1RAlways)
+// v1.14/v1.15e: trail behind swing OR EMA (ride the leg; mirrored BUY/SELL)
 double TrailStructureStops(const STicketProtect &tk, const MqlRates &r[], const int n, const double atr)
   {
    if(!InpUseStructureTrail || n < 10) return NO_CAND;
    bool past1R = (tk.initRiskPts > 0.0 && tk.peakPts >= tk.initRiskPts);
    if(!tk.beDone && !(InpTrailAfter1RAlways && past1R)) return NO_CAND;
+   double best = NO_CAND;
    int sw = LastXSwingLow(r, n, InpTrailSwingStrength + 1, InpTrailSwingStrength, tk.dir);
+   if(sw >= 0)
+     {
+      double xSw = XL(r, sw, tk.dir) - atr * g_prof.slBufferATR;
+      if(xSw > best) best = xSw;
+     }
+   // EMA trail: keep SL under/above exec EMA while flow still with trade
+   double e[];
+   if(EMAValues(g_hEMAExec, 3, e) && atr > 0.0)
+     {
+      double xEma = tk.dir * e[1] - atr * g_prof.slBufferATR;
+      if(g_candleFlow == 0 || g_candleFlow == tk.dir)
+         if(xEma > best) best = xEma;
+     }
+   if(best > NO_CAND / 2.0) return best;
+   // fall through to original swing-only path below
+   sw = LastXSwingLow(r, n, InpTrailSwingStrength + 1, InpTrailSwingStrength, tk.dir);
    if(sw < 0) return NO_CAND;
    return XL(r, sw, tk.dir) - atr * g_prof.slBufferATR;
   }
@@ -5033,18 +5329,104 @@ void CheckFridayClose()
 //==================================================================
 void ClearArmedZone()
   {
+   g_zoneBuyActive = false; g_zoneBuyTop = 0; g_zoneBuyBot = 0; g_zoneBuyName = ""; g_zoneBuyWhy = "";
+   g_zoneSellActive = false; g_zoneSellTop = 0; g_zoneSellBot = 0; g_zoneSellName = ""; g_zoneSellWhy = "";
    g_zoneActive = false; g_zoneTop = 0; g_zoneBot = 0; g_zoneDir = 0; g_zoneName = ""; g_zoneWhy = "";
+  }
+
+void ClearArmedZoneDir(const int dir)
+  {
+   if(dir > 0)
+     { g_zoneBuyActive = false; g_zoneBuyTop = 0; g_zoneBuyBot = 0; g_zoneBuyName = ""; g_zoneBuyWhy = ""; }
+   else if(dir < 0)
+     { g_zoneSellActive = false; g_zoneSellTop = 0; g_zoneSellBot = 0; g_zoneSellName = ""; g_zoneSellWhy = ""; }
+   if(g_zoneDir == dir)
+     { g_zoneActive = false; g_zoneTop = 0; g_zoneBot = 0; g_zoneDir = 0; g_zoneName = ""; g_zoneWhy = ""; }
+  }
+
+bool ZoneActive(const int dir)
+  {
+   if(dir > 0) return g_zoneBuyActive;
+   if(dir < 0) return g_zoneSellActive;
+   return false;
+  }
+
+bool GetArmedZonePrices(const int dir, double &top, double &bot, string &name)
+  {
+   top = 0; bot = 0; name = "";
+   if(dir > 0 && g_zoneBuyActive)
+     { top = g_zoneBuyTop; bot = g_zoneBuyBot; name = g_zoneBuyName; return true; }
+   if(dir < 0 && g_zoneSellActive)
+     { top = g_zoneSellTop; bot = g_zoneSellBot; name = g_zoneSellName; return true; }
+   return false;
   }
 
 void SetArmedZone(const int dir, const double xTop, const double xBot, const string name, const string why)
   {
    double p1 = XReal(xTop, dir), p2 = XReal(xBot, dir);
+   double top = (p1 > p2) ? p1 : p2;
+   double bot = (p1 < p2) ? p1 : p2;
+   // v1.15e: arm BUY and SELL zones independently (both can be live at once)
+   if(dir > 0)
+     {
+      g_zoneBuyActive = true; g_zoneBuyTop = top; g_zoneBuyBot = bot;
+      g_zoneBuyName = name; g_zoneBuyWhy = why;
+     }
+   else if(dir < 0)
+     {
+      g_zoneSellActive = true; g_zoneSellTop = top; g_zoneSellBot = bot;
+      g_zoneSellName = name; g_zoneSellWhy = why;
+     }
    g_zoneActive = true;
    g_zoneDir    = dir;
-   g_zoneTop    = (p1 > p2) ? p1 : p2;
-   g_zoneBot    = (p1 < p2) ? p1 : p2;
+   g_zoneTop    = top;
+   g_zoneBot    = bot;
    g_zoneName   = name;
    g_zoneWhy    = why;
+  }
+
+// Enter at drawn zone when price returns with rejection candle (mirrored BUY/SELL)
+bool TryArmedZoneRetest(const int dir, string &why, double &slOut)
+  {
+   why = ""; slOut = 0.0;
+   if(dir == 0 || !ZoneActive(dir)) return false;
+   double top = 0, bot = 0; string zname = "";
+   if(!GetArmedZonePrices(dir, top, bot, zname)) return false;
+   MqlRates r[];
+   if(LoadRates(g_tf, 8, r) < 3) return false;
+   double atr = ATRBaseline(8);
+   if(atr <= 0.0) atr = ATRValue();
+   if(atr <= 0.0) return false;
+   // Touch zone + close with trend (BUY: low into zone, bullish close; SELL: high into zone, bearish)
+   bool tap = false;
+   if(dir > 0)
+      tap = (r[1].low <= top && r[1].close >= bot && r[1].close > r[1].open);
+   else
+      tap = (r[1].high >= bot && r[1].close <= top && r[1].close < r[1].open);
+   if(!tap)
+     {
+      why = DirStr(dir) + " " + zname + " zone armed, awaiting retest";
+      return false;
+     }
+   // Rejection wick in trend direction
+   double rng = r[1].high - r[1].low;
+   if(rng <= 0.0) return false;
+   if(dir > 0)
+     {
+      double lower = MathMin(r[1].open, r[1].close) - r[1].low;
+      if(lower < 0.20 * rng) { why = "BUY zone touch needs rejection wick"; return false; }
+     }
+   else
+     {
+      double upper = r[1].high - MathMax(r[1].open, r[1].close);
+      if(upper < 0.20 * rng) { why = "SELL zone touch needs rejection wick"; return false; }
+     }
+   string late = "";
+   if(LateChaseBlocked(dir, late))
+     { why = zname + " zone " + late; return false; }
+   slOut = (dir > 0) ? (bot - atr * g_prof.slBufferATR) : (top + atr * g_prof.slBufferATR);
+   why = zname + " " + DirStr(dir) + " ZONE retest";
+   return true;
   }
 
 void RecordChartSignal(const int dir, const string engine, const string reason, const bool taken, const double sl)
@@ -5259,16 +5641,26 @@ void DrawSwingStructure()
 
 void DrawArmedZone()
   {
-   if(!InpShowZones || !g_zoneActive || g_zoneTop <= g_zoneBot) return;
+   if(!InpShowZones) return;
    datetime t1 = iTime(_Symbol, g_tf, 12);
    datetime t2 = iTime(_Symbol, g_tf, 0) + PeriodSeconds(g_tf) * 4;
    if(t1 == 0) t1 = TimeCurrent() - PeriodSeconds(g_tf) * 12;
    if(t2 == 0) t2 = TimeCurrent() + PeriodSeconds(g_tf) * 4;
-   color clr = (g_zoneDir > 0) ? InpBullColor : InpBearColor;
-   AnRect("ZONE", t1, g_zoneTop, t2, g_zoneBot, clr);
-   AnHLine("ZT", g_zoneTop, InpZoneColor, STYLE_DOT, 1);
-   AnHLine("ZB", g_zoneBot, InpZoneColor, STYLE_DOT, 1);
-   AnText("ZL", t2, g_zoneTop, g_zoneName + " " + DirStr(g_zoneDir) + " ZONE", InpZoneColor, 8, ANCHOR_LEFT_UPPER);
+   // v1.15e: draw BUY and SELL zones together
+   if(g_zoneBuyActive && g_zoneBuyTop > g_zoneBuyBot)
+     {
+      AnRect("ZONEB", t1, g_zoneBuyTop, t2, g_zoneBuyBot, InpBullColor);
+      AnHLine("ZBT", g_zoneBuyTop, InpBullColor, STYLE_DOT, 1);
+      AnHLine("ZBB", g_zoneBuyBot, InpBullColor, STYLE_DOT, 1);
+      AnText("ZBL", t2, g_zoneBuyTop, g_zoneBuyName + " BUY ZONE", InpBullColor, 8, ANCHOR_LEFT_UPPER);
+     }
+   if(g_zoneSellActive && g_zoneSellTop > g_zoneSellBot)
+     {
+      AnRect("ZONES", t1, g_zoneSellTop, t2, g_zoneSellBot, InpBearColor);
+      AnHLine("ZST", g_zoneSellTop, InpBearColor, STYLE_DOT, 1);
+      AnHLine("ZSB", g_zoneSellBot, InpBearColor, STYLE_DOT, 1);
+      AnText("ZSL", t2, g_zoneSellTop, g_zoneSellName + " SELL ZONE", InpBearColor, 8, ANCHOR_LEFT_UPPER);
+     }
   }
 
 void DrawLastSignal()
@@ -5387,6 +5779,10 @@ void DrawMarketBoard()
    AnLabel("BS2", x, y, StringFormat("Stats: prop %d softRR %d dropQ %d dropOth %d EXEC %d",
                                      g_statPropose, g_statRRSoftExt, g_statDropQuality, g_statDropOther, g_statExecuted),
            (g_statExecuted > 0) ? clrLightGreen : InpDashText, InpDashFont); y += lh;
+   AnLabel("BS3", x, y, StringFormat("BUY prop/exec %d/%d | SELL prop/exec %d/%d | zones B=%s S=%s",
+                                     g_statPropBuy, g_statExecBuy, g_statPropSell, g_statExecSell,
+                                     g_zoneBuyActive ? "ON" : "off", g_zoneSellActive ? "ON" : "off"),
+           (g_statExecBuy + g_statExecSell > 0) ? clrLightGreen : InpDashText, InpDashFont); y += lh;
    AnLabel("BN", x, y, StringFormat("BUY needs: %s | SELL needs: %s | Dir %s | CT %s",
                                     Clip(g_buyNeeds, 18), Clip(g_sellNeeds, 18),
                                     EnumToString(InpTradeDirection),
@@ -5634,6 +6030,10 @@ void DrawDash()
    SetLabel(line++, StringFormat("Stats  : prop %d | softRR %d | dropQ %d | dropFlow %d | dropOth %d | EXEC %d",
                                  g_statPropose, g_statRRSoftExt, g_statDropQuality, g_statDropFlow, g_statDropOther, g_statExecuted),
             (g_statExecuted > 0) ? ok : InpDashText);
+   SetLabel(line++, StringFormat("Dirs   : BUY prop/exec %d/%d | SELL prop/exec %d/%d | zones B=%s S=%s",
+                                 g_statPropBuy, g_statExecBuy, g_statPropSell, g_statExecSell,
+                                 g_zoneBuyActive ? "ON" : "off", g_zoneSellActive ? "ON" : "off"),
+            (g_statExecBuy > 0 && g_statExecSell > 0) ? ok : ((g_statExecBuy + g_statExecSell > 0) ? warn : InpDashText));
    SetLabel(line++, StringFormat("Quality: %d / min %d | %s | last risk USD %.2f (cap USD %s)",
                                  g_lastQuality, EffectiveMinQuality(),
                                  Clip(g_lastQualityWhy == "" ? "-" : g_lastQualityWhy, 40),
@@ -5803,7 +6203,7 @@ int OnInit()
    LogMsg(StringFormat("v%s dual-direction ON — each %s bar logs BUY+SELL per engine; FINAL flips on H1 CHoCH+M15; TradeDir=%s CT=%s",
                        EA_VER, TFStr(g_tf), EnumToString(InpTradeDirection),
                        CounterTrendPermitted() ? "ON" : "off"), true);
-   LogMsg(StringFormat("v1.15d CORE: no History self-lock | sess=%d histDay=%d | soft %d/%dm | hardDay=%d | cool %db/%dm | BE@%.2fR | MaxSL_USD=%.0f | MaxPos=%d",
+   LogMsg(StringFormat("v1.15e CORE: zones+fastUP+real-retest ALL | trail/BE ride | cool=SL-only | sess=%d histDay=%d | soft %d/%dm | hardDay=%d | cool %db/%dm | BE@%.2fR | MaxSL_USD=%.0f | MaxPos=%d",
                        g_tradesSession, g_tradesHistDay, InpMaxTradesRolling, InpMaxTradesRollingMin, InpMaxTradesPerDay,
                        InpCooldownBarsAfterLoss, InpCooldownAfterLossMin,
                        InpBreakEvenR, InpMaxLossPerTradeMoney, InpMaxPositions), true);
@@ -5933,22 +6333,42 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
          double pl = HistoryDealGetDouble(trans.deal, DEAL_PROFIT) + HistoryDealGetDouble(trans.deal, DEAL_SWAP) + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
          string cmt = HistoryDealGetString(trans.deal, DEAL_COMMENT);
          bool flipExit = (StringFind(cmt, "flip") >= 0 || StringFind(cmt, "FLIP") >= 0);
-         if(pl < 0.0)
+         long dealReason = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+         bool stopLoss = (dealReason == DEAL_REASON_SL);
+         // v1.15e: cooldown ONLY on stop-loss. TP / BE-lock / trail / flip → immediate next zone (both dirs)
+         if(stopLoss && pl < 0.0)
            {
             g_lastLossTime = (datetime)HistoryDealGetInteger(trans.deal, DEAL_TIME);
-            // v1.15: cooldown after ANY loss including flip-whipsaw (was: flip exits skipped cooldown)
             if(InpCooldownBarsAfterLoss > 0)
               {
                g_bypassLossCooldown = false;
                g_lossCooldownBarsLeft = InpCooldownBarsAfterLoss;
                datetime bar0 = iTime(_Symbol, g_tf, 0);
                g_lossCooldownUntilBar = bar0 + (datetime)(InpCooldownBarsAfterLoss * PeriodSeconds(g_tf));
-               LogMsg(StringFormat("Loss cooldown %d %s bars (flipExit=%s pl=%.2f)", InpCooldownBarsAfterLoss, TFStr(g_tf), flipExit ? "Y" : "N", pl), true);
+               LogMsg(StringFormat("SL cooldown %d %s bars (pl=%.2f)", InpCooldownBarsAfterLoss, TFStr(g_tf), pl), true);
               }
+            if(InpCooldownAfterLossMin > 0) g_lastLossTime = TimeCurrent();
            }
-         // Only a profitable flip-exit may arm immediate reverse; losing flips must cool down
-         if(flipExit && pl >= 0.0) g_bypassLossCooldown = true;
-         else if(flipExit && pl < 0.0) { g_bypassLossCooldown = false; g_flipEnterNow = false; }
+         else
+           {
+            // TP / lock / flip / trail exit — no idle gap: scan both zone dirs now
+            g_lossCooldownBarsLeft = 0;
+            g_lossCooldownUntilBar = 0;
+            g_bypassLossCooldown = true;
+            g_zoneScanImmediate = true;
+            g_pendingFlipDir = 0; // either BUY or SELL zone next
+            if(flipExit && InpFlipEnterImmediate)
+              {
+               g_flipEnterNow = true;
+               // Prefer opposite of closed deal type
+               long dtype = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
+               int closedDir = (dtype == DEAL_TYPE_BUY) ? 1 : ((dtype == DEAL_TYPE_SELL) ? -1 : 0);
+               // Deal type on exit is the close side; position was opposite
+               if(closedDir != 0) g_pendingFlipDir = closedDir; // buy-close → was SELL → next often BUY zone
+              }
+            LogMsg(StringFormat("Close → next zone NOW (flip=%s SL=%s pl=%.2f) — BUY+SELL zones armed",
+                                flipExit ? "Y" : "N", stopLoss ? "Y" : "N", pl), true);
+           }
         }
       g_statsDirty = true;
      }

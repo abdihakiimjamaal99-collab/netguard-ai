@@ -1,7 +1,7 @@
-VERSION 1.15c — 2026-10-19
+VERSION 1.15d — 2026-10-19
 
-Killer live −$18.12: morning BUY into BEAR + impulse SELLs → full SL.
-Fix: InpKillerPullbackOnly / RequireFlow / RequireStruct / RequireMSS
-  → pullback+chart-flow+MSS only; no impulse-displacement K.
-GF untouched. Scalp/CONT still OFF. BE lock from 1.15b kept.
-F7 loud file. No profit guarantee.
+Bug: History same-magic day count (53) → DAY LOCK vs cap 12 (Abdi BULL locked).
+Fix: session counters since OnInit; hard MaxTrades/day=0; soft 8/60m;
+     consec hard lock OFF; dashboard shows reason + release time.
+Proof: internal/v115d-self-lock-replay.py (hist 53 → OPEN on v1.15d).
+F7 loud file. No self-lock. No profit guarantee.

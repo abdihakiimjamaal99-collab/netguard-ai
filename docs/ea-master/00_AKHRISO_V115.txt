@@ -1,17 +1,15 @@
 ╔══════════════════════════════════════════════════════════════╗
-║  KAN WAA v1.15c — LOAD THIS — Abdihakiim Jamaal              ║
+║  KAN WAA v1.15d — LOAD THIS — Abdihakiim Jamaal              ║
 ╚══════════════════════════════════════════════════════════════╝
 
-KILLER (K) — sababta −$18.12 (18 trade):
-• Subax: BUY chase marka flow BEAR (4189→4172) → SL −4.x
-• Galab: SELL impulse / late → SL −3…−5
-• Impulse-displacement K waa la xidhay
+CILLADDA 16:12 (v1.15c):
+• Status: DAY LOCKED — Trades 53/12 — BULL run, lama geli Karin
+• Sabab: History MAALINTA oo dhan (53) ayaa loo tiriyay, xitaa versions hore
 
-v1.15c MAXAA KA BADALAY KILLER:
-1) Pullback/retest ONLY (impulse displacement OFF)
-2) Chart-flow waa inuu heshiis yahay (BUY vs BEAR = BLOCK)
-3) HH/HL ama LH/LL + liquidity sweep/MSS reclaim — GF (+$6.40) lama taaban
+v1.15d FIX (Abdi: HA IS-XIDHIN):
+1) Tirinta = kaliya THIS attach (tan OnInit ka dib) — History 53 lama isticmaalo lock
+2) Hard MaxTrades/day = OFF (0); soft = 8 trade / 60 daqiiqo + cooldown SL
+3) Haddii lock/throttle: dashboard wuxuu muujiyaa sababta + release time
 
-Weli: BE/LOCK 1.15b | Scalp+IMP CONT OFF | BUY+SELL | $5 SL la beddeli karaa
-SAMEE: 00_KAN_WAA_V115_MASTER_LOAD_THIS.mq5 → F7 (header 1.15c)
-EA ma dammaanad qaado faa'iido.
+SAMEE: ka saar v115c → 00_KAN_WAA_V115_MASTER_LOAD_THIS.mq5 → F7 (header 1.15d)
+BUY+SELL furan. EA ma dammaanad qaado faa'iido.

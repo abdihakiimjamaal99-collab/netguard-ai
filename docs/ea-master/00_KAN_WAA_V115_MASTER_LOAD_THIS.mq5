@@ -1,16 +1,17 @@
 //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-//!!  MJ-MASTER VERSION 1.15c — LATEST FIX BUILD — 2026-10-19       !!
-//!!  v1.15c KILLER GATE (Abdi live K −$18.12 / 18 trades):         !!
-//!!   K losses = morning BUY chase into BEAR + impulse SELLs → SL  !!
-//!!   FIX: Killer = pullback/retest ONLY + chart-flow + MSS/struct !!
-//!!        NO impulse-displacement / late-chase K entries          !!
-//!!  Keep: BE lock 1.15b | Scalp/CONT OFF | GF untouched | BUY+SELL!!
+//!!  MJ-MASTER VERSION 1.15d — LATEST FIX BUILD — 2026-10-19       !!
+//!!  v1.15d NO SELF-LOCK (Abdi 16:12: DAY LOCKED 53/12 on BULL):  !!
+//!!   BUG: RefreshDailyStats counted ALL same-magic History today  !!
+//!!   FIX: count only THIS instance entries since OnInit            !!
+//!!        hard MaxTrades/day default OFF; soft rolling 60m throttle!!
+//!!        lock reason + auto-release time on dashboard             !!
+//!!  Keep: Killer PB gate | BE lock | Scalp/CONT OFF | BUY+SELL    !!
 //!!  Haddii aad aragto sadarkan, waa version-ka ugu dambeeyay      !!
 //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 //+------------------------------------------------------------------+
 //|                              EA_BOT_ABDIHAKIIM_JAMAAL_MASTER.mq5 |
 //|                     Unified master EA  -  Abdihakiim Jamaal      |
-//|  *** VERSION 1.15c — Killer pullback-only + BE lock ***
+//|  *** VERSION 1.15d — no history self-lock + soft throttle ***
 //+------------------------------------------------------------------+
 //|  Single-file MetaTrader 5 Expert Advisor.                        |
 //|                                                                  |
@@ -34,7 +35,7 @@
 #property version     "1.15"
 #property description "Unified MT5 EA: ICT Unicorn + Killer Start + Multi-tier Scalp + 5-in-1 Book engine."
 #property description "One central entry gate, per-symbol profiles, strict SL-based risk, send reconciliation,"
-#property description "v1.15c: Killer pullback+flow+MSS only (no impulse chase). Single file."
+#property description "v1.15d: no History self-lock; session counters + soft throttle. Single file."
 #property strict
 
 //==================================================================
@@ -158,8 +159,10 @@ input bool              InpTightenSLForRisk    = true;            // Cap SL dist
 input ENUM_TP_MODE      InpTPMode              = TP_TRAIL;        // Profit exit: Trail (default) or Fixed R
 input double            InpTakeProfitR         = 0.0;             // Fixed TP in R (used when TPMode=Fixed R; 0 = none)
 input double            InpDailyMaxLossPct     = 0.0;             // Daily max loss % (0 = OFF — no DAY LOCK)
-input int               InpMaxTradesPerDay     = 12;              // Max entries per day (v1.15: stop 50-trade days; 0=OFF)
-input int               InpMaxConsecLosses     = 4;               // Max consecutive losses (v1.15 ON; 0=OFF)
+input int               InpMaxTradesPerDay     = 0;               // HARD max entries/day (v1.15d default OFF — Abdi no self-lock)
+input int               InpMaxTradesRolling    = 8;               // Soft throttle: max entries in rolling window (0=off)
+input int               InpMaxTradesRollingMin = 60;              // Soft throttle window minutes
+input int               InpMaxConsecLosses     = 0;               // HARD consec-loss day lock (v1.15d OFF — was History-bug)
 input int               InpCooldownAfterLossMin= 8;               // Cooldown after loss minutes (v1.15 ON; 0=OFF)
 input double            InpEquityDDKillPct     = 0.0;             // Equity DD kill switch % (0 = OFF)
 input bool              InpKillCloseAll        = true;            // Kill switch also closes all EA positions (if DD enabled)
@@ -273,7 +276,7 @@ input color             InpTPColor             = clrLime;         // Placement T
 //  SECTION 2 : STRUCTS & GLOBALS
 //==================================================================
 #define EA_NAME        "MJ-MASTER"
-#define EA_VER         "1.15c"
+#define EA_VER         "1.15d"
 #define EA_AUTHOR      "Abdihakiim Jamaal"
 #define DASH_W_PX      560
 #define DASH_LINE_H    16
@@ -397,9 +400,13 @@ bool              g_statsDirty      = true;
 bool              g_paused          = false;
 bool              g_halted          = false;     // kill switch / hard stop (manual resume)
 string            g_haltReason      = "";
-bool              g_dayLocked       = false;     // daily limit reached, resumes next day
+bool              g_dayLocked       = false;     // hard daily limit (only if inputs > 0)
 string            g_dayLockReason   = "";
+datetime          g_dayLockUntil    = 0;         // auto-release time (0 = next day rollover)
+string            g_throttleReason  = "";        // soft rolling throttle (NOT a day lock)
+datetime          g_throttleUntil   = 0;         // when soft throttle releases
 bool              g_fridayClosedToday = false;
+datetime          g_eaInitTime      = 0;         // THIS instance OnInit — never count older History
 
 int               g_htfBias         = 0;     // final trade direction (+1/-1/0)
 int               g_bias1           = 0;     // TF1 final (struct+EMA)
@@ -458,14 +465,19 @@ bool              g_idleRelaxed        = false; // lowest-priority rule relaxed 
 string            g_idleRelaxedRule    = "";    // which soft rule IDLE-WATCHDOG relaxed
 string            g_lastBlockRule      = "";    // last soft gate/engine block (for IDLE-WATCHDOG)
 
-// daily stats
-int               g_tradesToday     = 0;
-double            g_dailyPL         = 0.0;
-int               g_consecLosses    = 0;
+// daily / session stats (v1.15d: locks use SESSION counters, not full History day)
+int               g_tradesToday     = 0;   // History same-magic today (DISPLAY only)
+int               g_tradesSession   = 0;   // entries since THIS OnInit (lock/throttle source)
+int               g_tradesHistDay   = 0;   // alias display: older runs same magic
+double            g_dailyPL         = 0.0; // History P/L today (display)
+double            g_sessionPL       = 0.0; // P/L on deals since g_eaInitTime
+int               g_consecLosses    = 0;   // consec losses since init only
 datetime          g_lastLossTime    = 0;
 double            g_balanceDayStart = 0.0;
 double            g_equityPeak      = 0.0;
 string            g_gvPeakName      = "";
+datetime          g_entryTimes[128]; // rolling entry timestamps (session)
+int               g_entryTimeN      = 0;
 
 // send ring
 SendRequestRecord g_send[SEND_RING];
@@ -2088,25 +2100,79 @@ bool SymbolMarketOpenNow(string &why)
    return false;
   }
 
-//--- daily statistics from history (magic + symbol) ----------------
+//--- daily statistics from history (DISPLAY) + SESSION locks (v1.15d) ---
+// Abdi 16:12 bug: counting ALL same-magic History deals today (53) vs cap 12
+// caused DAY LOCK on a fresh v1.15c attach during a clear BULL run.
+// Rule: HARD locks / soft throttle use only THIS instance (since g_eaInitTime).
+
+void RecordSessionEntry()
+  {
+   datetime t = TimeCurrent();
+   if(g_entryTimeN < 128)
+     {
+      g_entryTimes[g_entryTimeN] = t;
+      g_entryTimeN++;
+     }
+   else
+     {
+      // shift left
+      for(int i = 0; i < 127; i++) g_entryTimes[i] = g_entryTimes[i + 1];
+      g_entryTimes[127] = t;
+     }
+   g_tradesSession++;
+  }
+
+int CountSessionEntriesSince(const datetime since)
+  {
+   int n = 0;
+   for(int i = 0; i < g_entryTimeN; i++)
+      if(g_entryTimes[i] >= since) n++;
+   return n;
+  }
+
+datetime SoftThrottleReleaseTime()
+  {
+   if(InpMaxTradesRolling <= 0 || InpMaxTradesRollingMin <= 0) return 0;
+   datetime now = TimeCurrent();
+   datetime win = now - (datetime)(InpMaxTradesRollingMin * 60);
+   // release when the oldest entry inside the saturated window ages out
+   datetime oldest = 0;
+   int inWin = 0;
+   for(int i = 0; i < g_entryTimeN; i++)
+     {
+      if(g_entryTimes[i] < win) continue;
+      inWin++;
+      if(oldest == 0 || g_entryTimes[i] < oldest) oldest = g_entryTimes[i];
+     }
+   if(inWin < InpMaxTradesRolling || oldest == 0) return 0;
+   return oldest + (datetime)(InpMaxTradesRollingMin * 60);
+  }
+
 void RefreshDailyStats()
   {
    datetime now      = TimeCurrent();
    datetime dayStart = DayStart(now);
+   datetime initCut  = (g_eaInitTime > 0) ? g_eaInitTime : dayStart;
    g_tradesToday  = 0;
+   g_tradesHistDay = 0;
    g_dailyPL      = 0.0;
-   g_consecLosses = 0;
-   g_lastLossTime = 0;
+   g_sessionPL    = 0.0;
+   // consec / lastLoss for LOCKS: rebuild from session-only closed deals below
+   int consecSess = 0;
+   datetime lastLossSess = 0;
 
    if(!HistorySelect(dayStart - 7 * 86400, now + 86400))
      {
       g_balanceDayStart = AccountInfoDouble(ACCOUNT_BALANCE);
+      g_lastStatsRefresh = now;
+      g_statsDirty = false;
       return;
      }
 
    ulong    posIds[];
    double   posPL[];
    datetime posT[];
+   datetime posOpen[];
    int      np = 0;
 
    int total = HistoryDealsTotal();
@@ -2123,38 +2189,47 @@ void RefreshDailyStats()
       double   pl    = HistoryDealGetDouble(d, DEAL_PROFIT) + HistoryDealGetDouble(d, DEAL_SWAP) + HistoryDealGetDouble(d, DEAL_COMMISSION);
       ulong    pid   = (ulong)HistoryDealGetInteger(d, DEAL_POSITION_ID);
 
+      // DISPLAY: full same-magic day (may include earlier EA versions / restarts)
       if(entry == DEAL_ENTRY_IN || entry == DEAL_ENTRY_INOUT)
-         if(t >= dayStart) g_tradesToday++;
-
+        {
+         if(t >= dayStart) g_tradesHistDay++;
+        }
       if(t >= dayStart) g_dailyPL += pl;
+      if(t >= initCut)  g_sessionPL += pl;
 
       int k = -1;
       for(int q = 0; q < np; q++) if(posIds[q] == pid) { k = q; break; }
       if(k < 0)
         {
          np++;
-         ArrayResize(posIds, np); ArrayResize(posPL, np); ArrayResize(posT, np);
+         ArrayResize(posIds, np); ArrayResize(posPL, np); ArrayResize(posT, np); ArrayResize(posOpen, np);
          k = np - 1;
-         posIds[k] = pid; posPL[k] = 0.0; posT[k] = t;
+         posIds[k] = pid; posPL[k] = 0.0; posT[k] = t; posOpen[k] = t;
         }
       posPL[k] += pl;
+      if(entry == DEAL_ENTRY_IN || entry == DEAL_ENTRY_INOUT)
+         if(t < posOpen[k] || posOpen[k] == 0) posOpen[k] = t;
       if(entry != DEAL_ENTRY_IN && t > posT[k]) posT[k] = t;
      }
 
-   // consecutive losses: walk closed positions from most recent backwards (today only, so the
-   // lock really does release at the next day); last loss time is taken over the whole window
+   g_tradesToday = g_tradesHistDay; // dashboard "hist" figure
+
+   // Consec losses ONLY for positions opened since THIS instance init
    bool streakOpen = true;
    for(int q = np - 1; q >= 0; q--)
      {
-      if(PositionSelectByTicket(posIds[q])) continue;   // still open -> not a closed result yet
+      if(PositionSelectByTicket(posIds[q])) continue;
+      if(posOpen[q] < initCut) { streakOpen = false; continue; }
       if(posPL[q] < 0.0)
         {
-         if(g_lastLossTime == 0 || posT[q] > g_lastLossTime) g_lastLossTime = posT[q];
-         if(streakOpen && posT[q] >= dayStart) g_consecLosses++;
+         if(lastLossSess == 0 || posT[q] > lastLossSess) lastLossSess = posT[q];
+         if(streakOpen) consecSess++;
         }
       else streakOpen = false;
-      if(posT[q] < dayStart) streakOpen = false;
      }
+   g_consecLosses = consecSess;
+   // Keep cooldown clock: prefer session loss, else leave prior g_lastLossTime if newer
+   if(lastLossSess > 0) g_lastLossTime = lastLossSess;
 
    g_balanceDayStart = AccountInfoDouble(ACCOUNT_BALANCE) - g_dailyPL;
    g_lastStatsRefresh = now;
@@ -2163,13 +2238,69 @@ void RefreshDailyStats()
 
 void CheckDailyLocks()
   {
-   if(g_dayLocked) return;
-   if(InpDailyMaxLossPct > 0.0 && g_balanceDayStart > 0.0 && g_dailyPL <= -g_balanceDayStart * InpDailyMaxLossPct / 100.0)
-     { g_dayLocked = true; g_dayLockReason = "daily loss cap"; LogMsg("Daily loss cap reached - no new trades until next day", true); return; }
-   if(InpMaxTradesPerDay > 0 && g_tradesToday >= InpMaxTradesPerDay)
-     { g_dayLocked = true; g_dayLockReason = "max trades/day"; LogMsg("Max trades per day reached", true); return; }
+   datetime now = TimeCurrent();
+   // Auto-release hard lock
+   if(g_dayLocked)
+     {
+      datetime until = g_dayLockUntil;
+      if(until == 0) until = DayStart(now) + 86400;
+      if(now >= until)
+        {
+         LogMsg(StringFormat("DAY LOCK auto-release (%s) @%s", g_dayLockReason, TimeToString(now, TIME_SECONDS)), true);
+         g_dayLocked = false; g_dayLockReason = ""; g_dayLockUntil = 0;
+        }
+      else
+         return; // still locked
+     }
+
+   datetime nextDay = DayStart(now) + 86400;
+
+   // HARD locks: session-scoped only (never History-day 53/12 bug)
+   if(InpDailyMaxLossPct > 0.0 && g_balanceDayStart > 0.0 && g_sessionPL <= -g_balanceDayStart * InpDailyMaxLossPct / 100.0)
+     {
+      g_dayLocked = true;
+      g_dayLockUntil = nextDay;
+      g_dayLockReason = StringFormat("session loss cap (sessPL %.2f) until %s",
+                                     g_sessionPL, TimeToString(nextDay, TIME_DATE|TIME_MINUTES));
+      LogMsg("HARD LOCK: " + g_dayLockReason, true);
+      return;
+     }
+   if(InpMaxTradesPerDay > 0 && g_tradesSession >= InpMaxTradesPerDay)
+     {
+      g_dayLocked = true;
+      g_dayLockUntil = nextDay;
+      g_dayLockReason = StringFormat("session max trades %d/%d (hist-day %d ignored) until %s",
+                                     g_tradesSession, InpMaxTradesPerDay, g_tradesHistDay,
+                                     TimeToString(nextDay, TIME_DATE|TIME_MINUTES));
+      LogMsg("HARD LOCK: " + g_dayLockReason, true);
+      return;
+     }
    if(InpMaxConsecLosses > 0 && g_consecLosses >= InpMaxConsecLosses)
-     { g_dayLocked = true; g_dayLockReason = "max consecutive losses"; LogMsg("Max consecutive losses reached - paused until next day", true); return; }
+     {
+      g_dayLocked = true;
+      g_dayLockUntil = nextDay;
+      g_dayLockReason = StringFormat("session consec losses %d/%d until %s",
+                                     g_consecLosses, InpMaxConsecLosses,
+                                     TimeToString(nextDay, TIME_DATE|TIME_MINUTES));
+      LogMsg("HARD LOCK: " + g_dayLockReason, true);
+      return;
+     }
+
+   // Soft rolling throttle state (for dashboard; GateAllows enforces)
+   datetime rel = SoftThrottleReleaseTime();
+   if(rel > now)
+     {
+      int n = CountSessionEntriesSince(now - (datetime)(InpMaxTradesRollingMin * 60));
+      g_throttleUntil = rel;
+      g_throttleReason = StringFormat("soft-throttle %d/%d in %dm — release %s",
+                                      n, InpMaxTradesRolling, InpMaxTradesRollingMin,
+                                      TimeToString(rel, TIME_MINUTES|TIME_SECONDS));
+     }
+   else
+     {
+      g_throttleUntil = 0;
+      g_throttleReason = "";
+     }
   }
 
 void CheckKillSwitch()
@@ -3908,6 +4039,8 @@ bool IsSoftGateReason(const string why)
       if(StringFind(why, "range-chop") >= 0) return false;
       if(StringFind(why, "max trades") >= 0) return false;
       if(StringFind(why, "consec") >= 0) return false;
+      if(StringFind(why, "soft-throttle") >= 0) return false;
+      if(StringFind(why, "day locked") >= 0) return false;
      }
    if(StringFind(why, "cooldown") >= 0) return true;
    if(StringFind(why, "one entry per bar") >= 0) return true;
@@ -3963,9 +4096,32 @@ bool GateAllows(string &why)
    if(g_paused)  { why = "paused"; return false; }
    if(!TradingAllowedByTerminal(why)) return false;
    if(SendBlocked(why)) return false;
-   if(g_dayLocked) { why = "day locked: " + g_dayLockReason; return false; }
+   if(g_dayLocked)
+     {
+      datetime until = (g_dayLockUntil > 0) ? g_dayLockUntil : (DayStart(TimeCurrent()) + 86400);
+      why = "day locked: " + g_dayLockReason + " | release " + TimeToString(until, TIME_DATE|TIME_MINUTES);
+      return false;
+     }
    string mktWhy = "";
    if(!SymbolMarketOpenNow(mktWhy)) { why = mktWhy; return false; }
+
+   // Soft rolling throttle (v1.15d) — NOT a day lock; auto-releases when window ages
+   if(InpMaxTradesRolling > 0 && InpMaxTradesRollingMin > 0)
+     {
+      datetime now = TimeCurrent();
+      int nRoll = CountSessionEntriesSince(now - (datetime)(InpMaxTradesRollingMin * 60));
+      if(nRoll >= InpMaxTradesRolling)
+        {
+         datetime rel = SoftThrottleReleaseTime();
+         if(rel == 0) rel = now + 60;
+         g_throttleUntil = rel;
+         g_throttleReason = StringFormat("soft-throttle %d/%d in %dm — release %s",
+                                         nRoll, InpMaxTradesRolling, InpMaxTradesRollingMin,
+                                         TimeToString(rel, TIME_MINUTES|TIME_SECONDS));
+         why = g_throttleReason;
+         return false;
+        }
+     }
 
    // Soft (trend-take may bypass these in EvaluateEntryGate) — v1.15: CHOP/cooldown hard when flag ON
    if(g_chopPause) { why = "CHOP pause"; return false; }
@@ -4228,7 +4384,7 @@ bool TryOpen(const SSignal &sig)
       g_statExecuted++;
       g_lastEntryBar = iTime(_Symbol, g_tf, 0);
       g_engLastFire[sig.engineId] = TimeCurrent();
-      g_tradesToday++;
+      RecordSessionEntry();   // v1.15d: session counter only (not History-day)
       g_statsDirty = true;
       g_bypassLossCooldown = false;
       g_pendingFlipDir = 0;
@@ -5415,10 +5571,19 @@ void DrawDash()
    string st = "RUNNING"; color stc = ok;
    if(g_halted)         { st = "HALTED - " + g_haltReason; stc = bad; }
    else if(g_paused)    { st = "PAUSED (manual)"; stc = warn; }
-   else if(g_dayLocked) { st = "DAY LOCKED - " + g_dayLockReason; stc = warn; }
+   else if(g_dayLocked)
+     {
+      datetime until = (g_dayLockUntil > 0) ? g_dayLockUntil : (DayStart(TimeCurrent()) + 86400);
+      st = "DAY LOCKED - " + g_dayLockReason;
+      if(StringFind(st, "until") < 0)
+         st += " | release " + TimeToString(until, TIME_DATE|TIME_MINUTES);
+      stc = warn;
+     }
+   else if(StringLen(g_throttleReason) > 0)
+     { st = "THROTTLE - " + g_throttleReason; stc = warn; }
    else if(g_candleFlow < 0) { st = "RUNNING — SELL ACTIVE (BEAR flow)"; stc = bad; }
    else if(g_candleFlow > 0) { st = "RUNNING — BUY ACTIVE (BULL flow)"; stc = ok; }
-   SetLabel(line++, "Status : " + Clip(st, 70), stc);
+   SetLabel(line++, "Status : " + Clip(st, 78), stc);
 
    string biasS = (g_candleFlow != 0) ? ((g_candleFlow > 0) ? "BULL" : "BEAR")
                 : ((g_htfBias > 0) ? "BULL" : ((g_htfBias < 0) ? "BEAR" : "WAIT"));
@@ -5442,16 +5607,24 @@ void DrawDash()
 
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    double dd = (g_equityPeak > 0.0) ? (1.0 - eq / g_equityPeak) * 100.0 : 0.0;
-   SetLabel(line++, StringFormat("Daily  : today P/L %.2f (lock %s) | Trades %d/%s | Consec %d/%s | DD %.1f%% | %s",
+   // v1.15d: show sess (lock source) vs hist-day (display only — older runs)
+   string hardCap = (InpMaxTradesPerDay > 0) ? IntegerToString(InpMaxTradesPerDay) : "off";
+   string softCap = (InpMaxTradesRolling > 0)
+                    ? StringFormat("%d/%dm", InpMaxTradesRolling, InpMaxTradesRollingMin) : "off";
+   SetLabel(line++, StringFormat("Daily  : P/L %.2f (lossLock %s) | Sess %d/%s | HistDay %d | Soft %s | Consec %d/%s",
                                  g_dailyPL,
                                  (InpDailyMaxLossPct > 0.0) ? (DoubleToString(InpDailyMaxLossPct, 1) + "%") : "OFF",
-                                 g_tradesToday,
-                                 (InpMaxTradesPerDay > 0) ? IntegerToString(InpMaxTradesPerDay) : "off",
+                                 g_tradesSession, hardCap, g_tradesHistDay, softCap,
                                  g_consecLosses,
-                                 (InpMaxConsecLosses > 0) ? IntegerToString(InpMaxConsecLosses) : "off",
-                                 dd,
-                                 IsCryptoSymbol() ? "BTC 24/7" : "FX 24/5"),
-            (g_dayLocked) ? bad : ((g_dailyPL < 0.0) ? warn : InpDashText));
+                                 (InpMaxConsecLosses > 0) ? IntegerToString(InpMaxConsecLosses) : "off"),
+            (g_dayLocked || StringLen(g_throttleReason) > 0) ? warn : ((g_dailyPL < 0.0) ? warn : InpDashText));
+   if(g_dayLocked || StringLen(g_throttleReason) > 0)
+     {
+      string rel = g_dayLocked
+                   ? (("release " + TimeToString((g_dayLockUntil > 0) ? g_dayLockUntil : (DayStart(TimeCurrent()) + 86400), TIME_DATE|TIME_MINUTES)))
+                   : g_throttleReason;
+      SetLabel(line++, "Lock   : " + Clip(rel, 72), warn);
+     }
 
    SetLabel(line++, "Send   : " + Clip(SendFlightSummary(), 70), (SendBlocked(nw)) ? warn : InpDashText);
    SetLabel(line++, "Gate   : " + Clip(g_gateReason == "" ? "ready" : g_gateReason, 70),
@@ -5598,6 +5771,9 @@ int OnInit()
    ArrayResize(g_tk, InpMaxPositions);
    for(int i = 0; i < InpMaxPositions; i++) g_tk[i].Reset();
    g_paused = false; g_halted = false; g_haltReason = ""; g_dayLocked = false; g_dayLockReason = "";
+   g_dayLockUntil = 0; g_throttleReason = ""; g_throttleUntil = 0;
+   g_eaInitTime = TimeCurrent();
+   g_tradesSession = 0; g_entryTimeN = 0; g_sessionPL = 0.0; g_consecLosses = 0;
    g_lastDay = DayStart(TimeCurrent());
    g_gvPeakName = "MJM_" + IntegerToString(InpMagic) + "_" + _Symbol + "_eqpeak";
    g_equityPeak = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -5627,11 +5803,12 @@ int OnInit()
    LogMsg(StringFormat("v%s dual-direction ON — each %s bar logs BUY+SELL per engine; FINAL flips on H1 CHoCH+M15; TradeDir=%s CT=%s",
                        EA_VER, TFStr(g_tf), EnumToString(InpTradeDirection),
                        CounterTrendPermitted() ? "ON" : "off"), true);
-   LogMsg(StringFormat("v1.15c CORE: K=pullback+flow+MSS | BE+LOCK | cool %db/%dm | maxDay=%d | BE@%.2fR | expRR>=%.1f | flipImm=%s | MaxSL_USD=%.0f | MaxPos=%d",
-                       InpCooldownBarsAfterLoss, InpCooldownAfterLossMin, InpMaxTradesPerDay,
-                       InpBreakEvenR, InpMinExpectancyRR,
-                       InpFlipEnterImmediate ? "ON" : "off",
-                       InpMaxLossPerTradeMoney, InpMaxPositions), true);
+   LogMsg(StringFormat("v1.15d CORE: no History self-lock | sess=%d histDay=%d | soft %d/%dm | hardDay=%d | cool %db/%dm | BE@%.2fR | MaxSL_USD=%.0f | MaxPos=%d",
+                       g_tradesSession, g_tradesHistDay, InpMaxTradesRolling, InpMaxTradesRollingMin, InpMaxTradesPerDay,
+                       InpCooldownBarsAfterLoss, InpCooldownAfterLossMin,
+                       InpBreakEvenR, InpMaxLossPerTradeMoney, InpMaxPositions), true);
+   LogMsg(StringFormat("v1.15d init@%s — History-day deals (%d) do NOT day-lock this attach",
+                       TimeToString(g_eaInitTime, TIME_DATE|TIME_SECONDS), g_tradesHistDay), true);
    return INIT_SUCCEEDED;
   }
 
@@ -5687,10 +5864,11 @@ void OnTimer()
    if(today != g_lastDay)
      {
       g_lastDay = today;
-      g_dayLocked = false; g_dayLockReason = "";
+      g_dayLocked = false; g_dayLockReason = ""; g_dayLockUntil = 0;
+      g_throttleReason = ""; g_throttleUntil = 0;
       g_fridayClosedToday = false;
       g_statsDirty = true;
-      LogMsg("New trading day - daily locks reset");
+      LogMsg("New trading day - daily locks reset (session counters kept until re-attach)");
      }
 
    ReconcileSendFlight();

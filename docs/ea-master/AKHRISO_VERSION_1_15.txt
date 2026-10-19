@@ -1,0 +1,8 @@
+VERSION 1.15e — 2026-10-19
+
+Bugs: UNI SELL @impulse LOW via "retest" bypass; BUY never fired (flow lag);
+      single zone; cooldown after TP left idle gap; scratch TP cut winners.
+Fix: dual BUY+SELL zones + retest entry; late-chase ALL eng; fast UP flow;
+     TRAIL far-TP/none + BE/ladder/swing+EMA; cooldown=SL only; dir counters.
+Proof: internal/v115e-extreme-retest-replay.py (PROOF OK, mirror BUY=SELL).
+F7 loud v115e. No profit guarantee. MaxSL_USD=$5.

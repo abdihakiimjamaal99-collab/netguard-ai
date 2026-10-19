@@ -1,0 +1,22 @@
+╔══════════════════════════════════════════════════════════════╗
+║  KAN WAA v1.15e — LOAD THIS — Abdihakiim Jamaal              ║
+╚══════════════════════════════════════════════════════════════╝
+
+CILLADDA 16:36 (v1.15d):
+• EXECUTED SELL UNI @4159.16 (impulse LOW) — "retest" been wax ka baxsaday late-chase
+• Price bounce → -3.12 daqiiqad gudaheed
+• BUY weligii "B:idle" / K blocked flow DOWN — xitaa 4159→4166 UP
+
+v1.15e FIX (Abdi: zones + BUY=SELL + trail):
+1) Late-chase / extreme — ALL engines (UNI/BOOK/KIL/SCP/flip). Fake "retest" @low waa REJECT
+2) True retest = bounce ≥0.40 ATR + rejection candle (labadaba BUY iyo SELL)
+3) Flow UP degdeg: micro-BOS / HL+EMA / displacement — BUY ma istaago DOWN
+4) BUY ZONE + SELL ZONE labadaba armed; geli marka price ku soo noqdo zone-ka
+5) TP fog (≥1.5R opposite zone) ama TP=0 marka flow xooggan — BE+ladder+swing/EMA trail
+   (ma jarayo faa'iidada yar; SL lacag $5 weli jirtaa)
+6) Close TP/lock/flip → isla markiiba next zone (cooldown = SL kaliya)
+7) Dashboard: BUY prop/exec | SELL prop/exec
+
+SAMEE: ka saar hore → 00_KAN_WAA_V115_MASTER_LOAD_THIS.mq5 ama
+       EA_BOT_ABDIHAKIIM_JAMAAL_MASTER_v115e.mq5 → F7 (header 1.15e)
+BUY+SELL furan. EA ma dammaanad qaado faa'iido.

@@ -1,0 +1,12 @@
+VERSION 1.15 — 2026-10-19
+
+Sabab: v1.14 live (XAUUSD.m M1) ≈ −38 USD / ~50 trades on $100 demo.
+Cilladaha: overtrade/chop, flip-whipsaw (cooldown bypass), BE@1R late,
+wins yar vs $5 SL losses, MaxTrades/day OFF.
+
+Xalka: chop HARD + range filter, cooldown after loss, max 12/day,
+BE@0.55R, expectancy TP≥SL, MaxPos=1, flip-immediate OFF.
+BUY+SELL retained. InpMaxLossPerTradeMoney still configurable (default 5).
+
+Runaan: F7 MetaEditor (Wine anti-debug → .ex5 here often fails).
+Dammaanad faa'iido: MA JIRTO. Risk ~5%/trade at $5 SL on $100 is too high for M1 spam.

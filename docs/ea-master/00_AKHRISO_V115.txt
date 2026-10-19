@@ -1,0 +1,18 @@
+╔══════════════════════════════════════════════════════════════╗
+║  KAN WAA v1.15 — LOAD THIS — Abdihakiim Jamaal               ║
+╚══════════════════════════════════════════════════════════════╝
+
+MAXAA DHACAY v1.14 LIVE?
+• Demo $100 → ~$48.6 | Profit ≈ −38 | ~50 trade / ~5 saacadood (XAUUSD M1)
+• Inta badan khasaare −2.4 ilaa −5.0 (SL) | faa'iido yar +0.1…+4.9
+• $5 SL × $100 = ~5% khatar HAL trade — 50 trade waa xad dhaaf
+• EA ma dammaanad qaado faa'iido weligeed
+
+MAXAA KA BADALAY v1.15? (caddeyn)
+1) CHOP/range filter adag — TREND-TAKE ma dhaafi karo chop/cooldown
+2) Cooldown ka dib SL (10 bar + 8 daqiiqo); flip-loss sidoo kale
+3) Max 12 trade/maalinti; MaxPos=1; quality sare; flip-immediate OFF
+4) BE degdeg ah @0.55R + partial 40% @1R; TP floor ≥ khasaare (expectancy)
+
+SAMEE: ka saar v114 → 00_KAN_WAA_V115_MASTER_LOAD_THIS.mq5 → F7 → AutoTrading ON
+BUY + SELL weli waa FURAN | MaxSL USD (default 5) waa la beddeli karaa

@@ -1,23 +1,17 @@
 ╔══════════════════════════════════════════════════════════════╗
-║  KAN WAA v1.15b — LOAD THIS — Abdihakiim Jamaal              ║
+║  KAN WAA v1.15c — LOAD THIS — Abdihakiim Jamaal              ║
 ╚══════════════════════════════════════════════════════════════╝
 
-MAXAA DHACAY v1.14 LIVE? (History OCR — tiro dhabta ah)
-• Profit −38.06 | Balance 48.61 | Deposit 86.67 | ~50 trade
-• Visible 45: WR 40% | avg win +$1.66 | avg loss −$2.26
-• Killer (K) ugu xun: −$12.48 | Scalp 0/4 (−$7) | IMP −$7.7
-• 7× faa'iido yar +0.10/+0.15 (BE scratch) vs 12× khasaare ≤ −$3
-• $5 SL × ~$100 = ~5% khatar/trade — EA MA DAMMAANAD QAADO FAA'IIDO
+KILLER (K) — sababta −$18.12 (18 trade):
+• Subax: BUY chase marka flow BEAR (4189→4172) → SL −4.x
+• Galab: SELL impulse / late → SL −3…−5
+• Impulse-displacement K waa la xidhay
 
-SABABTA BE / LOCK (code):
-• Peak <1R → SL lama adkayn → faa'iido way soo noqotay SL
-• Modify INVALID_STOPS: retry/close ma jirin → “BE ma shaqeynayo”
+v1.15c MAXAA KA BADALAY KILLER:
+1) Pullback/retest ONLY (impulse displacement OFF)
+2) Chart-flow waa inuu heshiis yahay (BUY vs BEAR = BLOCK)
+3) HH/HL ama LH/LL + liquidity sweep/MSS reclaim — GF (+$6.40) lama taaban
 
-v1.15b FIX:
-1) BE MOVE log: ok / retcode; retry floor+spread; emergency close
-2) Lock ≥70% peak @1R, ≥85% @2R
-3) Scalp OFF + Impulse CONT OFF (xogta live)
-4) Chop/cooldown/max12 (v1.15) weli
-
-SAMEE: 00_KAN_WAA_V115_MASTER_LOAD_THIS.mq5 → F7 → AutoTrading ON
-BUY+SELL furan | MaxSL USD (5) la beddeli karaa
+Weli: BE/LOCK 1.15b | Scalp+IMP CONT OFF | BUY+SELL | $5 SL la beddeli karaa
+SAMEE: 00_KAN_WAA_V115_MASTER_LOAD_THIS.mq5 → F7 (header 1.15c)
+EA ma dammaanad qaado faa'iido.

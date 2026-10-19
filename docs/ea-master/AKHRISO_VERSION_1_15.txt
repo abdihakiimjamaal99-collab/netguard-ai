@@ -1,7 +1,7 @@
-VERSION 1.15b — 2026-10-19
+VERSION 1.15c — 2026-10-19
 
-Sabab BE: peak <1R + Modify fail = faa'iido lama xiro (Abdi live).
-Fix: ProtectMoveSL (retcode log, retry, emergency close), 70%@1R / 85%@2R.
-Also: Scalp OFF, IMP CONT OFF (History: SC 0/4, IMP −$7.7, K −$12.5).
-Keep: chop HARD, cooldown, max 12/day, BUY+SELL, $5 SL configurable.
-F7 MetaEditor. Dammaanad faa'iido: MA JIRTO.
+Killer live −$18.12: morning BUY into BEAR + impulse SELLs → full SL.
+Fix: InpKillerPullbackOnly / RequireFlow / RequireStruct / RequireMSS
+  → pullback+chart-flow+MSS only; no impulse-displacement K.
+GF untouched. Scalp/CONT still OFF. BE lock from 1.15b kept.
+F7 loud file. No profit guarantee.

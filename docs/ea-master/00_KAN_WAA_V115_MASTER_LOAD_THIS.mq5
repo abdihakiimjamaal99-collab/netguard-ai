@@ -1,16 +1,16 @@
 //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-//!!  MJ-MASTER VERSION 1.15b — LATEST FIX BUILD — 2026-10-19       !!
-//!!  v1.15b BE/LOCK FIX (Abdi): faa'iido waa in la xiro — ma lumin!!
-//!!   BUG: peak <1R + Modify INVALID_STOPS = silent, no retry/close!!
-//!!   FIX: BE+spread buffer, log every MOVE ok/retcode, retry floor !!
-//!!        lock ≥70% peak @1R / ≥85% @2R; emergency close if fail  !!
-//!!  Keep v1.15: chop HARD + cooldown + maxDay + BUY/SELL + $5 cap !!
+//!!  MJ-MASTER VERSION 1.15c — LATEST FIX BUILD — 2026-10-19       !!
+//!!  v1.15c KILLER GATE (Abdi live K −$18.12 / 18 trades):         !!
+//!!   K losses = morning BUY chase into BEAR + impulse SELLs → SL  !!
+//!!   FIX: Killer = pullback/retest ONLY + chart-flow + MSS/struct !!
+//!!        NO impulse-displacement / late-chase K entries          !!
+//!!  Keep: BE lock 1.15b | Scalp/CONT OFF | GF untouched | BUY+SELL!!
 //!!  Haddii aad aragto sadarkan, waa version-ka ugu dambeeyay      !!
 //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 //+------------------------------------------------------------------+
 //|                              EA_BOT_ABDIHAKIIM_JAMAAL_MASTER.mq5 |
 //|                     Unified master EA  -  Abdihakiim Jamaal      |
-//|  *** VERSION 1.15b — BE/peak-lock fix + chop/cooldown ***
+//|  *** VERSION 1.15c — Killer pullback-only + BE lock ***
 //+------------------------------------------------------------------+
 //|  Single-file MetaTrader 5 Expert Advisor.                        |
 //|                                                                  |
@@ -34,7 +34,7 @@
 #property version     "1.15"
 #property description "Unified MT5 EA: ICT Unicorn + Killer Start + Multi-tier Scalp + 5-in-1 Book engine."
 #property description "One central entry gate, per-symbol profiles, strict SL-based risk, send reconciliation,"
-#property description "v1.15b: BE+peak-lock with retcode logs, retry, emergency close. Single file."
+#property description "v1.15c: Killer pullback+flow+MSS only (no impulse chase). Single file."
 #property strict
 
 //==================================================================
@@ -169,6 +169,10 @@ input bool              InpEnableUnicorn       = true;            // ICT Unicorn
 input int               InpPrioUnicorn         = 1;               // Unicorn priority
 input bool              InpEnableKiller        = true;            // ICT Killer Start (trend + liquidity run)
 input int               InpPrioKiller          = 2;               // Killer priority
+input bool              InpKillerPullbackOnly  = true;            // v1.15c: K = EMA/structure pullback ONLY (no impulse disp)
+input bool              InpKillerRequireFlow   = true;            // v1.15c: K dir must match chart candle flow
+input bool              InpKillerRequireStruct = true;            // v1.15c: require HH/HL or LH/LL (no naked impulse)
+input bool              InpKillerRequireMSS    = true;            // v1.15c: need liquidity run / micro MSS reclaim
 input bool              InpEnableBook          = true;            // 5-in-1 Book engine
 input int               InpPrioBook            = 4;               // Book priority
 input ENUM_BOOK_MODE    InpBookMode            = BOOK_AUTO;       // Book mode
@@ -269,7 +273,7 @@ input color             InpTPColor             = clrLime;         // Placement T
 //  SECTION 2 : STRUCTS & GLOBALS
 //==================================================================
 #define EA_NAME        "MJ-MASTER"
-#define EA_VER         "1.15b"
+#define EA_VER         "1.15c"
 #define EA_AUTHOR      "Abdihakiim Jamaal"
 #define DASH_W_PX      560
 #define DASH_LINE_H    16
@@ -3005,6 +3009,12 @@ bool KillerScan(const MqlRates &r[], const int n, const double atr, const int di
    const bool agg = ModeAggressive();
    const double atrBase = ATRBaseline(10);
    const double atrUse  = (atrBase > 0.0) ? atrBase : atr;
+   // v1.15c: live K −$18 — never fire Killer against chart flow (morning BUY into BEAR)
+   if(InpKillerRequireFlow && g_candleFlow != 0 && dir != g_candleFlow)
+     {
+      why = DirStr(dir) + " K blocked: flow " + g_flowTag + " (need pullback with flow)";
+      return false;
+     }
    double ema[];
    bool emaOK = EMAValues(g_hEMAExec, 3, ema) && (dir * (r[1].close - ema[1]) > 0.0) && (dir * (ema[1] - ema[2]) > 0.0);
 
@@ -3017,7 +3027,15 @@ bool KillerScan(const MqlRates &r[], const int n, const double atr, const int di
    if(structOK && (XH(r, h1, dir) - XH(r, h2, dir) < 0.25 * atrUse || XL(r, l1, dir) - XL(r, l2, dir) < 0.15 * atrUse))
       structOK = false;
 
-   // Aggressive / impulse continuation: EMA pullback bounce OR live impulse displacement (no HH/HL required)
+   // v1.15c: optional hard MSS/structure — no naked impulse without HH/HL or LH/LL
+   if(InpKillerRequireStruct && !structOK)
+     {
+      if(!haveSwings) why = DirStr(dir) + " K wait: insufficient structure";
+      else why = DirStr(dir) + ((dir > 0) ? " K wait: no HH/HL" : " K wait: no LH/LL");
+      return false;
+     }
+
+   // No-structure path: EMA pullback bounce ONLY (impulse displacement disabled when PullbackOnly)
    if(!structOK)
      {
       if(!agg && !ImpulseAligned(dir))
@@ -3026,44 +3044,52 @@ bool KillerScan(const MqlRates &r[], const int n, const double atr, const int di
          else why = DirStr(dir) + ((dir > 0) ? " no HH/HL" : " no LH/LL");
          return false;
         }
-      if(!emaOK && !ImpulseAligned(dir))
+      if(!emaOK)
         {
-         why = DirStr(dir) + ((dir > 0) ? " no HH/HL" : " no LH/LL");
+         why = DirStr(dir) + " K wait: EMA not aligned (pullback only)";
          return false;
         }
-      // EMA must be in X-space (dir*ema) — raw ema vs XL was always-true for SELL
       bool touched = false;
       double xEma = dir * ema[1];
       for(int k = 1; k <= 5; k++)
          if(XL(r, k, dir) <= xEma + 0.20 * atrUse) { touched = true; break; }
       double body1 = XC(r, 1, dir) - XO(r, 1, dir);
-      double bodySum = 0.0;
-      for(int k = 1; k <= 3; k++)
-        {
-         double b = XC(r, k, dir) - XO(r, k, dir);
-         if(b > 0.0) bodySum += b;
-        }
-      double minB = DispMinBody(atrUse, true);
       bool bounce = (touched && body1 >= 0.20 * atrUse && XC(r, 1, dir) > XO(r, 1, dir));
-      bool impDisp = ImpulseAligned(dir) && body1 > 0.0 &&
-                     (body1 >= minB || bodySum >= 0.70 * atrUse) &&
-                     (XC(r, 1, dir) > XH(r, 2, dir) || dir * (r[1].close - r[3].close) > 0.5 * atrUse);
-      // v1.14: never chase impulse at the extreme — require pullback bounce when extended
+      // late-chase veto even on bounce if already extended
       string lateWhy = "";
-      if(impDisp && !bounce && LateChaseBlocked(dir, lateWhy))
-        { why = DirStr(dir) + " " + lateWhy; return false; }
-      if(!bounce && !impDisp)
-        { why = DirStr(dir) + " cont: waiting EMA pullback bounce"; return false; }
-      if(!bounce && InpPreferPullbackEntry && impDisp)
-        { why = DirStr(dir) + " cont: prefer pullback/retest (not late impulse)"; return false; }
+      if(LateChaseBlocked(dir, lateWhy))
+        { why = DirStr(dir) + " K " + lateWhy; return false; }
+      if(!bounce)
+        {
+         // legacy impulse path — OFF by default in v1.15c (live K chase losses)
+         if(InpKillerPullbackOnly)
+           { why = DirStr(dir) + " K wait: EMA pullback/retest only (impulse OFF)"; return false; }
+         double bodySum = 0.0;
+         for(int k = 1; k <= 3; k++)
+           {
+            double b = XC(r, k, dir) - XO(r, k, dir);
+            if(b > 0.0) bodySum += b;
+           }
+         double minB = DispMinBody(atrUse, true);
+         bool impDisp = ImpulseAligned(dir) && body1 > 0.0 &&
+                        (body1 >= minB || bodySum >= 0.70 * atrUse) &&
+                        (XC(r, 1, dir) > XH(r, 2, dir) || dir * (r[1].close - r[3].close) > 0.5 * atrUse);
+         if(!impDisp)
+           { why = DirStr(dir) + " cont: waiting EMA pullback bounce"; return false; }
+         if(InpPreferPullbackEntry)
+           { why = DirStr(dir) + " cont: prefer pullback/retest (not late impulse)"; return false; }
+         slOut = NearestContSL(dir, r, n, atrUse);
+         why   = "KillerStart " + DirStr(dir) + " impulse displacement";
+         g_lastStructEvent = "CONT " + DirStr(dir);
+         return true;
+        }
       slOut = NearestContSL(dir, r, n, atrUse);
-      why   = bounce ? ("KillerStart " + DirStr(dir) + " continuation EMA bounce")
-                     : ("KillerStart " + DirStr(dir) + " impulse displacement");
-      g_lastStructEvent = "CONT " + DirStr(dir);
+      why   = "KillerStart " + DirStr(dir) + " continuation EMA bounce";
+      g_lastStructEvent = "CONT-PB " + DirStr(dir);
       return true;
      }
 
-   // liquidity run: Aggressive widens to 8 bars
+   // Structure path: liquidity run (sweep) + reclaim — NOT raw impulse break substitute when MSS required
    int j = -1;
    int runMax = agg ? 8 : 4;
    for(int k = 1; k <= runMax; k++)
@@ -3073,16 +3099,26 @@ bool KillerScan(const MqlRates &r[], const int n, const double atr, const int di
       double prior = XL(r, pl, dir);
       if(XL(r, k, dir) < prior && XC(r, k, dir) > prior) { j = k; break; }
      }
-   // Impulse: treat a fresh break of prior swing extreme as a "run" substitute
-   if(j < 0 && ImpulseAligned(dir))
+   // Impulse break-as-run: only if MSS not required (v1.15c default OFF — caused late K entries)
+   if(j < 0 && !InpKillerRequireMSS && ImpulseAligned(dir))
      {
       int pe = XHighestIdx(r, n, 2, 8, dir);
       if(pe >= 0 && XC(r, 1, dir) > XH(r, pe, dir)) j = 1;
      }
-   if(j < 0) { why = DirStr(dir) + " structure ok, no fresh liquidity run"; return false; }
+   if(j < 0)
+     {
+      why = DirStr(dir) + (InpKillerRequireMSS
+                           ? " K wait: need liquidity sweep/MSS reclaim (no impulse sub)"
+                           : " structure ok, no fresh liquidity run");
+      return false;
+     }
 
-   // trigger displacement — use pre-impulse ATR + multi-bar body (live ATR inflates mid-drop)
-   double minBody = DispMinBody(atrUse, agg);
+   // After sweep: require pullback-style reclaim close (body with trend), not extreme chase
+   string lateWhy2 = "";
+   if(LateChaseBlocked(dir, lateWhy2))
+     { why = DirStr(dir) + " K " + lateWhy2; return false; }
+
+   double minBody = DispMinBody(atrUse, false); // stricter than Aggressive for K
    double body1 = XC(r, 1, dir) - XO(r, 1, dir);
    double bodySum = 0.0;
    for(int k = 1; k <= 3; k++)
@@ -3093,15 +3129,25 @@ bool KillerScan(const MqlRates &r[], const int n, const double atr, const int di
    bool strong1 = (body1 > 0.0 && XC(r, 1, dir) > XH(r, 2, dir) && body1 >= minBody);
    bool strongN = (bodySum >= 0.75 * atrUse && XC(r, 1, dir) > XO(r, 1, dir) &&
                    dir * (r[1].close - r[3].close) > 0.0);
+   // Prefer reclaim after sweep: close back above swept level (already in j loop) + EMA touch
+   bool emaTouch = false;
+   if(emaOK)
+     {
+      double xEma = dir * ema[1];
+      for(int k = 1; k <= 5; k++)
+         if(XL(r, k, dir) <= xEma + 0.25 * atrUse) { emaTouch = true; break; }
+     }
+   if(InpKillerPullbackOnly && !emaTouch && !strong1)
+     { why = DirStr(dir) + " K wait: pullback/retest after sweep (no naked disp)"; return false; }
    if(!strong1 && !strongN)
      { why = DirStr(dir) + " run seen, waiting strong displacement"; return false; }
 
-   if(!emaOK && !ImpulseAligned(dir))
-     { why = DirStr(dir) + " price/EMA not aligned with trend"; return false; }
+   if(!emaOK)
+     { why = DirStr(dir) + " K wait: price/EMA not aligned"; return false; }
 
    slOut = NearestContSL(dir, r, n, atrUse);
-   why   = "KillerStart " + DirStr(dir) + " structure+run+displacement";
-   g_lastStructEvent = (dir > 0) ? "HH/HL+BOS" : "LH/LL+BOS";
+   why   = "KillerStart " + DirStr(dir) + " structure+sweep+pullback";
+   g_lastStructEvent = (dir > 0) ? "HH/HL+MSS" : "LH/LL+MSS";
    return true;
   }
 
@@ -4312,15 +4358,25 @@ void EvaluateEntryGate(const bool newExecBar, const bool newM1Bar)
         {
          string why = ""; double sl = 0.0;
          int d = KillerDirectionStartSignal(statusOnly ? 0 : desired, why, sl);
-         if(!statusOnly && (newExecBar || g_flipEnterNow) && d != 0 && TradeDirAllows(d))
+         string kLate = "";
+         bool kOk = (d != 0 && TradeDirAllows(d) && !LateChaseBlocked(d, kLate));
+         if(!kOk && d != 0 && StringLen(kLate) > 0)
+            LogMsg("KIL DROP late-chase " + DirStr(d) + " | " + kLate, true);
+         if(!statusOnly && (newExecBar || g_flipEnterNow) && kOk)
            {
-            sigs[cnt].Reset();
-            sigs[cnt].valid = true; sigs[cnt].dir = d; sigs[cnt].sl = sl; sigs[cnt].score = 1.5;
-            sigs[cnt].priority = g_engPrio[ENG_KILLER]; sigs[cnt].engineId = ENG_KILLER;
-            sigs[cnt].engine = "KIL"; sigs[cnt].reason = why;
-            cnt++;
-            NoteGatePropose(d, "KIL");
-            LogMsg("PROPOSE KIL " + DirStr(d) + " | " + why + (g_flipEnterNow ? " [FLIP-NOW]" : ""));
+            // v1.15c: never propose raw impulse-displacement K (live −$18 bucket)
+            if(InpKillerPullbackOnly && StringFind(why, "impulse displacement") >= 0)
+               LogMsg("KIL DROP impulse-disp " + DirStr(d) + " | " + why, true);
+            else
+              {
+               sigs[cnt].Reset();
+               sigs[cnt].valid = true; sigs[cnt].dir = d; sigs[cnt].sl = sl; sigs[cnt].score = 1.55;
+               sigs[cnt].priority = g_engPrio[ENG_KILLER]; sigs[cnt].engineId = ENG_KILLER;
+               sigs[cnt].engine = "KIL"; sigs[cnt].reason = why;
+               cnt++;
+               NoteGatePropose(d, "KIL");
+               LogMsg("PROPOSE KIL " + DirStr(d) + " | " + why + (g_flipEnterNow ? " [FLIP-NOW]" : ""));
+              }
            }
         }
       if(g_engOn[ENG_BOOK])
@@ -5571,7 +5627,7 @@ int OnInit()
    LogMsg(StringFormat("v%s dual-direction ON — each %s bar logs BUY+SELL per engine; FINAL flips on H1 CHoCH+M15; TradeDir=%s CT=%s",
                        EA_VER, TFStr(g_tf), EnumToString(InpTradeDirection),
                        CounterTrendPermitted() ? "ON" : "off"), true);
-   LogMsg(StringFormat("v1.15b CORE: BE+peakLOCK+retry | chop HARD | cool %db/%dm | maxDay=%d | BE@%.2fR | expRR>=%.1f | flipImm=%s | MaxSL_USD=%.0f | MaxPos=%d",
+   LogMsg(StringFormat("v1.15c CORE: K=pullback+flow+MSS | BE+LOCK | cool %db/%dm | maxDay=%d | BE@%.2fR | expRR>=%.1f | flipImm=%s | MaxSL_USD=%.0f | MaxPos=%d",
                        InpCooldownBarsAfterLoss, InpCooldownAfterLossMin, InpMaxTradesPerDay,
                        InpBreakEvenR, InpMinExpectancyRR,
                        InpFlipEnterImmediate ? "ON" : "off",

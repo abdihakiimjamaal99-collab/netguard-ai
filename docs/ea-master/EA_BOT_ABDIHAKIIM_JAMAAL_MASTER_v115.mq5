@@ -4866,8 +4866,9 @@ void EvaluateEntryGate(const bool newExecBar, const bool newM1Bar)
          if(cnt >= 8) break;
         }
      }
-   if(g_zoneScanImmediate && (cnt > 0 || newExecBar))
-      g_zoneScanImmediate = false; // consumed this scan cycle
+   // Keep dual-dir zone watch after TP/lock/flip until a proposal fires (no idle gap)
+   if(g_zoneScanImmediate && cnt > 0)
+      g_zoneScanImmediate = false;
 
    // Impulse CONT: chart bars + immediate flip reverse tick (needs concrete dir)
    if(!statusOnly && cnt == 0 && (newExecBar || newM1Bar || g_flipEnterNow))

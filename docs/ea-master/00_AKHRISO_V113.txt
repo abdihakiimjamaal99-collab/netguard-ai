@@ -1,0 +1,22 @@
+╔══════════════════════════════════════════════════════════════╗
+║  KAN WAA v1.13 — AKHRISO / LOAD THIS — Abdihakiim Jamaal     ║
+╚══════════════════════════════════════════════════════════════╝
+
+DHIBAATADA v1.12: PROPOSE SELL sax → GATE drop "RR 0.80 < min 1.50"
+(Quality 0/min 45) → ZERO trades inta suuqu 4187→4169 dhacayay.
+
+MAXAA LA SAXAY (v1.13):
+  • RR ma joojinayo trend — TP = max(structure, 1.5R, 1.5×ATR)
+  • Quality soft-allow marka flow chart-ka la jaanqaado
+  • Soft gates (cooldown/spread/chop) TREND-TAKE bypass
+  • Dashboard: Action SELL/BUY ACTIVE + Stats prop/drop/EXEC
+  • $5 SL cap + BE/peak lock weli jiraan | v112 waa la hayay
+
+SAMEE HADDA:
+  1) Ka saar v112 chart-ka
+  2) Copy 00_KAN_WAA_V113_MASTER_LOAD_THIS.mq5 → MQL5\Experts\
+  3) MetaEditor F7 → .ex5
+  4) Jiid XAUUSD M1 → AutoTrading ON
+  5) Hubi: VERSION 1.13 + Status "SELL ACTIVE" marka BEAR
+
+CADDEYN (replay Abdi 12:08): SELL×2 + BUY bounce×1 = EXEC 3 | dropRR=0

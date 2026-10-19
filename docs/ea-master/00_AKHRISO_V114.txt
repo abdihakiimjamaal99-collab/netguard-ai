@@ -1,0 +1,10 @@
+╔══════════════════════════════════════════════════════════════╗
+║  KAN WAA v1.14 — LOAD THIS — Abdihakiim Jamaal               ║
+╚══════════════════════════════════════════════════════════════╝
+
+MAXAA KA BADALAY v1.13?
+1) ENTRY: pullback/retest — late chase (impulseFollow bottom) waa la diiday
+2) BE @1R kadib SL wuu raacaa faa'iidada (trail/ladder) — faa'iido ma noqoto khasaare
+3) Flow flip: chart UP/DOWN → BUY↔SELL isla meesha suuqu marayo (micro CHoCH reclaim)
+
+SAMEE: ka saar v113 → 00_KAN_WAA_V114_MASTER_LOAD_THIS.mq5 → F7 → AutoTrading ON

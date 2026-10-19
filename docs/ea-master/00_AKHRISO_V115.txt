@@ -1,18 +1,23 @@
 ╔══════════════════════════════════════════════════════════════╗
-║  KAN WAA v1.15 — LOAD THIS — Abdihakiim Jamaal               ║
+║  KAN WAA v1.15b — LOAD THIS — Abdihakiim Jamaal              ║
 ╚══════════════════════════════════════════════════════════════╝
 
-MAXAA DHACAY v1.14 LIVE?
-• Demo $100 → ~$48.6 | Profit ≈ −38 | ~50 trade / ~5 saacadood (XAUUSD M1)
-• Inta badan khasaare −2.4 ilaa −5.0 (SL) | faa'iido yar +0.1…+4.9
-• $5 SL × $100 = ~5% khatar HAL trade — 50 trade waa xad dhaaf
-• EA ma dammaanad qaado faa'iido weligeed
+MAXAA DHACAY v1.14 LIVE? (History OCR — tiro dhabta ah)
+• Profit −38.06 | Balance 48.61 | Deposit 86.67 | ~50 trade
+• Visible 45: WR 40% | avg win +$1.66 | avg loss −$2.26
+• Killer (K) ugu xun: −$12.48 | Scalp 0/4 (−$7) | IMP −$7.7
+• 7× faa'iido yar +0.10/+0.15 (BE scratch) vs 12× khasaare ≤ −$3
+• $5 SL × ~$100 = ~5% khatar/trade — EA MA DAMMAANAD QAADO FAA'IIDO
 
-MAXAA KA BADALAY v1.15? (caddeyn)
-1) CHOP/range filter adag — TREND-TAKE ma dhaafi karo chop/cooldown
-2) Cooldown ka dib SL (10 bar + 8 daqiiqo); flip-loss sidoo kale
-3) Max 12 trade/maalinti; MaxPos=1; quality sare; flip-immediate OFF
-4) BE degdeg ah @0.55R + partial 40% @1R; TP floor ≥ khasaare (expectancy)
+SABABTA BE / LOCK (code):
+• Peak <1R → SL lama adkayn → faa'iido way soo noqotay SL
+• Modify INVALID_STOPS: retry/close ma jirin → “BE ma shaqeynayo”
 
-SAMEE: ka saar v114 → 00_KAN_WAA_V115_MASTER_LOAD_THIS.mq5 → F7 → AutoTrading ON
-BUY + SELL weli waa FURAN | MaxSL USD (default 5) waa la beddeli karaa
+v1.15b FIX:
+1) BE MOVE log: ok / retcode; retry floor+spread; emergency close
+2) Lock ≥70% peak @1R, ≥85% @2R
+3) Scalp OFF + Impulse CONT OFF (xogta live)
+4) Chop/cooldown/max12 (v1.15) weli
+
+SAMEE: 00_KAN_WAA_V115_MASTER_LOAD_THIS.mq5 → F7 → AutoTrading ON
+BUY+SELL furan | MaxSL USD (5) la beddeli karaa

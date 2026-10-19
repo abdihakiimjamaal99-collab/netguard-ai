@@ -1,17 +1,16 @@
 //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-//!!  MJ-MASTER VERSION 1.15 — LATEST FIX BUILD — 2026-10-19        !!
-//!!  v1.15 (Abdi LIVE -38 / 50 trades): chop+cooldown+fewer entries!!
-//!!   1) Stricter CHOP/range filter (HARD — no TREND-TAKE bypass)  !!
-//!!   2) Cooldown after SL (bars+minutes); flip loss also cooldowns!!
-//!!   3) Max trades/day + higher quality; BE earlier (0.55R)       !!
-//!!   4) Expectancy: TP floor ≥ loss (avg win target ≥ avg loss)   !!
-//!!  KEEP: BUY+SELL both | $5 SL money-cap configurable            !!
+//!!  MJ-MASTER VERSION 1.15b — LATEST FIX BUILD — 2026-10-19       !!
+//!!  v1.15b BE/LOCK FIX (Abdi): faa'iido waa in la xiro — ma lumin!!
+//!!   BUG: peak <1R + Modify INVALID_STOPS = silent, no retry/close!!
+//!!   FIX: BE+spread buffer, log every MOVE ok/retcode, retry floor !!
+//!!        lock ≥70% peak @1R / ≥85% @2R; emergency close if fail  !!
+//!!  Keep v1.15: chop HARD + cooldown + maxDay + BUY/SELL + $5 cap !!
 //!!  Haddii aad aragto sadarkan, waa version-ka ugu dambeeyay      !!
 //!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 //+------------------------------------------------------------------+
 //|                              EA_BOT_ABDIHAKIIM_JAMAAL_MASTER.mq5 |
 //|                     Unified master EA  -  Abdihakiim Jamaal      |
-//|  *** VERSION 1.15 — chop filter + SL cooldown + expectancy ***
+//|  *** VERSION 1.15b — BE/peak-lock fix + chop/cooldown ***
 //+------------------------------------------------------------------+
 //|  Single-file MetaTrader 5 Expert Advisor.                        |
 //|                                                                  |
@@ -35,7 +34,7 @@
 #property version     "1.15"
 #property description "Unified MT5 EA: ICT Unicorn + Killer Start + Multi-tier Scalp + 5-in-1 Book engine."
 #property description "One central entry gate, per-symbol profiles, strict SL-based risk, send reconciliation,"
-#property description "per-ticket ladder protection and on-chart dashboard. Single file, no includes."
+#property description "v1.15b: BE+peak-lock with retcode logs, retry, emergency close. Single file."
 #property strict
 
 //==================================================================
@@ -116,7 +115,7 @@ input bool              InpRequireCandleFlow   = true;            // Entry dir m
 input ENUM_ENTRY_MODE   InpEntryMode           = ENTRY_BALANCED;  // Entry aggressiveness (v1.15: fewer but better)
 input ENUM_TRADE_DIRECTION InpTradeDirection   = TRADE_BOTH;      // Trade direction filter
 input bool              InpAllowCounterTrend   = false;           // Allow entries against chart flow (default OFF)
-input bool              InpUseContinuationFallback = true;        // Impulse continuation when engines idle
+input bool              InpUseContinuationFallback = false;       // Impulse CONT (v1.15b OFF — live IMP −$7.7)
 input int               InpContWaitBars        = 4;               // Bars of clear chart bias before continuation
 input double            InpPullbackMaxATR      = 2.0;             // Pullback deeper than N×Exec ATR → WAIT (no counter)
 input double            InpMaxExtensionATR     = 1.5;             // Late-chase veto: no impulse entry if >N×ATR from swing extreme
@@ -174,7 +173,7 @@ input bool              InpEnableBook          = true;            // 5-in-1 Book
 input int               InpPrioBook            = 4;               // Book priority
 input ENUM_BOOK_MODE    InpBookMode            = BOOK_AUTO;       // Book mode
 input double            InpMinBookScore        = 1.4;             // Book: minimum score to trade (stricter)
-input bool              InpEnableScalp         = true;            // Multi-tier scalp (M15 / M5 / M1)
+input bool              InpEnableScalp         = false;           // Multi-tier scalp (v1.15b OFF — live 0/4, −$7)
 input int               InpPrioScalp           = 3;               // Scalp priority (lower = fires sooner; Book is 4)
 input double            InpScalpMaxSLATR       = 2.0;             // Scalp: max SL distance (x ATR exec TF)
 input int               InpStructLookback      = 80;              // Structure lookback (bars, exec TF)
@@ -216,13 +215,18 @@ input double            InpBEProfitPctOfSL     = 55.0;            // BE when flo
 input double            InpBEAccountPct        = 3.0;             // BE when floating profit >= N% of equity (0 = off)
 input int               InpBreakEvenPtsOverride= 0;               // BE trigger points (0 = profile)
 input int               InpBEBufferOverride    = 0;               // BE buffer points (0 = profile)
+input bool              InpBEIncludeSpread     = true;            // BE SL = entry ± (buffer + spread)
+input bool              InpLockEmergencyClose  = true;            // If lock modify fails & profit at risk → close market
+input int               InpLockModifyRetries   = 3;               // Retries on INVALID_STOPS / FROZEN
+input double            InpPeakLockMinR        = 1.0;             // Start peak% lock once peak ≥ this R
+input double            InpPeakLockPctAt1R     = 70.0;            // Lock ≥N% of peak once ≥1R (floor)
 input bool              InpUseLadder           = true;            // Peak-profit protection ladder (tick peak)
-input double            InpTier1R              = 1.0;             // Tier 1 from (R) — first lock at 1R
-input double            InpTier1Pct            = 70.0;            // Tier 1 protect % of peak (v1.15: less scratch-lock)
-input double            InpTier2R              = 1.5;             // Tier 2 from (R)
-input double            InpTier2Pct            = 88.0;            // Tier 2 protect % of peak
+input double            InpTier1R              = 1.0;             // Tier 1 from (R) — lock ≥70% peak at 1R
+input double            InpTier1Pct            = 70.0;            // Tier 1 protect % of peak (v1.15b: ≥70%@1R)
+input double            InpTier2R              = 2.0;             // Tier 2 from (R) — Abdi: lock hard above 2R
+input double            InpTier2Pct            = 85.0;            // Tier 2 protect % of peak (≥85%@2R)
 input double            InpTier3R              = 2.5;             // Tier 3 from (R)
-input double            InpTier3Pct            = 94.0;            // Tier 3 protect % of peak
+input double            InpTier3Pct            = 90.0;            // Tier 3 protect % of peak
 input double            InpReversalPeakKeepPct = 90.0;            // On M5 reverse+disp: lock >= N% of peak
 input bool              InpUseStructureTrail   = true;            // Trail behind last swing (after 1R / BE)
 input bool              InpTrailAfter1RAlways  = true;            // After 1R peak: trail even if BE modify lagged
@@ -265,7 +269,7 @@ input color             InpTPColor             = clrLime;         // Placement T
 //  SECTION 2 : STRUCTS & GLOBALS
 //==================================================================
 #define EA_NAME        "MJ-MASTER"
-#define EA_VER         "1.15"
+#define EA_VER         "1.15b"
 #define EA_AUTHOR      "Abdihakiim Jamaal"
 #define DASH_W_PX      560
 #define DASH_LINE_H    16
@@ -817,7 +821,7 @@ void LoadSymbolProfile()
    if(StringFind(s, "XAU") >= 0 || StringFind(s, "GOLD") >= 0)
      {
       // reference: 2-digit gold (point = 0.01 USD)
-      SetProfile(PROF_GOLD, "Gold", 300, 1.5, 60, 15, 250, 20, 30, 0.15);
+      SetProfile(PROF_GOLD, "Gold", 300, 1.5, 60, 20, 120, 10, 30, 0.15); // v1.15b: BE trig 120pts (~$1.2), buf 20
       if(g_digits == 3) scale = 10.0;
      }
    else if(StringFind(s, "XAG") >= 0 || StringFind(s, "SILVER") >= 0)
@@ -2649,6 +2653,12 @@ bool SendMarketOrder(const SSignal &sig, double lot, double sl, double tp)
 
 bool ModifyPositionSL(const ulong ticket, const double sl, const double tp)
   {
+   uint rc = 0;
+   return ModifyPositionSLEx(ticket, sl, tp, rc);
+  }
+
+bool ModifyPositionSLEx(const ulong ticket, const double sl, const double tp, uint &retcodeOut)
+  {
    MqlTradeRequest req; MqlTradeResult res;
    ZeroMemory(req); ZeroMemory(res);
    req.action   = TRADE_ACTION_SLTP;
@@ -2659,9 +2669,114 @@ bool ModifyPositionSL(const ulong ticket, const double sl, const double tp)
    req.magic    = (ulong)InpMagic;
    ResetLastError();
    bool ok = OrderSend(req, res);
+   retcodeOut = res.retcode;
    if(ok && (res.retcode == TRADE_RETCODE_DONE || res.retcode == TRADE_RETCODE_PLACED || res.retcode == TRADE_RETCODE_NO_CHANGES))
       return true;
-   LogMsg(StringFormat("Modify #%I64u SL %.*f failed: %s (%u) err %d", ticket, g_digits, sl, RetcodeStr(res.retcode), res.retcode, GetLastError()), true);
+   return false;
+  }
+
+// Clamp desired SL to broker stop/freeze distance from current bid/ask; return false if cannot improve
+bool ClampSLToStopFloor(const int dir, double &sl)
+  {
+   if(!RefreshPrices()) return false;
+   double floor = FloorDist();
+   // also respect live spread so BE is not inside the spread
+   double spr = (g_ask - g_bid);
+   if(spr < 0.0) spr = 0.0;
+   double minOff = floor;
+   if(InpBEIncludeSpread && spr > minOff) minOff = spr;
+   if(dir > 0)
+     {
+      double maxSL = g_bid - minOff;
+      if(sl > maxSL) sl = NormPrice(maxSL);
+      if(sl >= g_bid) return false;
+     }
+   else
+     {
+      double minSL = g_ask + minOff;
+      if(sl < minSL) sl = NormPrice(minSL);
+      if(sl <= g_ask) return false;
+     }
+   return true;
+  }
+
+// Try SL move with retries; loud log every attempt. On hard fail with profit at risk → emergency close.
+bool ProtectMoveSL(const ulong ticket, const int dir, const double entry, const double oldSL,
+                   double wantSL, const double tp, const string src,
+                   const double profitPts, const double profitMoney, const double peakPts,
+                   const bool mustKeepProfit)
+  {
+   if(!RefreshPrices())
+     {
+      LogMsg(StringFormat("%s MOVE #%I64u SKIP no-tick want=%.*f", src, ticket, g_digits, wantSL), true);
+      return false;
+     }
+   int retries = (InpLockModifyRetries > 0) ? InpLockModifyRetries : 1;
+   double trySL = NormPrice(wantSL);
+   for(int attempt = 1; attempt <= retries; attempt++)
+     {
+      if(!ClampSLToStopFloor(dir, trySL))
+        {
+         LogMsg(StringFormat("%s MOVE #%I64u attempt %d CLAMP-FAIL SL %.*f -> %.*f (bid=%.*f ask=%.*f floor=%d) — too close",
+                             src, ticket, attempt, g_digits, oldSL, g_digits, trySL,
+                             g_digits, g_bid, g_digits, g_ask, BrokerStopFloor()), true);
+         // pull one more Point inside and retry
+         trySL = NormPrice(trySL - dir * _Point);
+         if(!ClampSLToStopFloor(dir, trySL))
+           {
+            if(mustKeepProfit && profitMoney > 0.0 && InpLockEmergencyClose)
+              {
+               LogMsg(StringFormat("%s EMERGENCY CLOSE #%I64u — cannot place lock SL, profit USD %.2f at risk",
+                                   src, ticket, profitMoney), true);
+               return ClosePositionVolume(ticket, 0.0, "lock fail close");
+              }
+            return false;
+           }
+        }
+      // Must not loosen vs old SL
+      if(oldSL > 0.0)
+        {
+         if(dir > 0 && trySL <= oldSL + _Point * 0.1)
+           {
+            LogMsg(StringFormat("%s MOVE #%I64u NO-IMPROVE old=%.*f try=%.*f", src, ticket, g_digits, oldSL, g_digits, trySL), true);
+            return false;
+           }
+         if(dir < 0 && trySL >= oldSL - _Point * 0.1)
+           {
+            LogMsg(StringFormat("%s MOVE #%I64u NO-IMPROVE old=%.*f try=%.*f", src, ticket, g_digits, oldSL, g_digits, trySL), true);
+            return false;
+           }
+        }
+      uint rc = 0;
+      bool ok = ModifyPositionSLEx(ticket, trySL, tp, rc);
+      if(ok)
+        {
+         LogMsg(StringFormat("%s MOVE #%I64u SL %.*f -> %.*f ok retcode=%u (profit %.0f pts / USD %.2f peak %.0f)",
+                             src, ticket, g_digits, oldSL, g_digits, trySL, rc, profitPts, profitMoney, peakPts), true);
+         return true;
+        }
+      LogMsg(StringFormat("%s MOVE #%I64u SL %.*f -> %.*f FAIL retcode=%u %s err=%d (attempt %d/%d)",
+                          src, ticket, g_digits, oldSL, g_digits, trySL, rc, RetcodeStr(rc), GetLastError(),
+                          attempt, retries), true);
+      if(rc == TRADE_RETCODE_NO_CHANGES) return true;
+      if(rc == TRADE_RETCODE_INVALID_STOPS || rc == TRADE_RETCODE_FROZEN || rc == TRADE_RETCODE_INVALID_PRICE)
+        {
+         // push SL further from market by another floor step and retry
+         trySL = NormPrice(trySL - dir * MathMax(FloorDist(), (g_ask - g_bid)));
+         Sleep(50);
+         RefreshPrices();
+         continue;
+        }
+      if(rc == TRADE_RETCODE_REQUOTE || rc == TRADE_RETCODE_PRICE_CHANGED || rc == TRADE_RETCODE_PRICE_OFF)
+        { Sleep(50); RefreshPrices(); continue; }
+      break;
+     }
+   if(mustKeepProfit && profitMoney > 0.0 && InpLockEmergencyClose)
+     {
+      LogMsg(StringFormat("%s EMERGENCY CLOSE #%I64u after modify fails — profit USD %.2f peakPts %.0f",
+                          src, ticket, profitMoney, peakPts), true);
+      return ClosePositionVolume(ticket, 0.0, "lock fail close");
+     }
    return false;
   }
 
@@ -4449,7 +4564,14 @@ double ApplyInstantBreakEven(const STicketProtect &tk, const double profitPts, c
       if(eq > 0.0 && profitMoney >= eq * InpBEAccountPct / 100.0) trig = true;
      }
    if(!trig) return NO_CAND;
-   return tk.dir * tk.entry + g_prof.beBufferPts * _Point;
+   double bufPts = (double)g_prof.beBufferPts;
+   if(InpBEIncludeSpread)
+     {
+      double sprPts = (g_ask - g_bid) / _Point;
+      if(sprPts > bufPts) bufPts = sprPts;
+     }
+   // X-space: lock at least entry + buffer (BUY) / entry - buffer (SELL)
+   return tk.dir * tk.entry + bufPts * _Point;
   }
 
 // Peak-profit ladder: protect a rising share of peak profit as R multiples grow
@@ -4530,33 +4652,19 @@ void ManageOpen()
                if(keep < 80.0) keep = 90.0;
                double lockPts = g_tk[ti].peakPts * keep / 100.0;
                double newSL = NormPrice(entry + dir * lockPts * _Point);
-               if(dir > 0 && newSL < g_bid - FloorDist())
-                 {
+               {
                   double oldSL = curSL;
-                  if(ModifyPositionSL(ticket, newSL, curTP))
+                  bool moved = ProtectMoveSL(ticket, dir, entry, oldSL, newSL, curTP, "FLIP-PEAK",
+                                             profitPts, profitMoney, g_tk[ti].peakPts, true);
+                  if(moved)
                     {
                      g_tk[ti].beDone = true;
-                     LogMsg(StringFormat("PEAK LOCK #%I64u %.*f -> %.*f (peak %.0f pts, keep %.0f%%) %s",
-                                         ticket, g_digits, oldSL, g_digits, newSL, g_tk[ti].peakPts, keep, flipWhy), true);
-                     g_lastFlipExit = StringFormat("PEAK LOCK %s keep %.0f%%", DirStr(dir), keep);
-                     // Prefer opposite after lock eventually closes (no hedge while open)
-                     g_pendingFlipDir = -dir;
-                     g_bypassLossCooldown = true;
-                    }
-                 }
-               else if(dir < 0 && newSL > g_ask + FloorDist())
-                 {
-                  double oldSL = curSL;
-                  if(ModifyPositionSL(ticket, newSL, curTP))
-                    {
-                     g_tk[ti].beDone = true;
-                     LogMsg(StringFormat("PEAK LOCK #%I64u %.*f -> %.*f (peak %.0f pts, keep %.0f%%) %s",
-                                         ticket, g_digits, oldSL, g_digits, newSL, g_tk[ti].peakPts, keep, flipWhy), true);
                      g_lastFlipExit = StringFormat("PEAK LOCK %s keep %.0f%%", DirStr(dir), keep);
                      g_pendingFlipDir = -dir;
-                     g_bypassLossCooldown = true;
+                     if(profitMoney >= 0.0) g_bypassLossCooldown = true;
+                     LogMsg(StringFormat("FLIP-PEAK done #%I64u keep %.0f%% (%s)", ticket, keep, flipWhy), true);
                     }
-                 }
+               }
               }
             else
               {
@@ -4610,6 +4718,7 @@ void ManageOpen()
       double xCur  = (curSL > 0.0) ? dir * curSL : NO_CAND;
       double best  = xCur;
       string src   = "";
+      double peakR = (g_tk[ti].initRiskPts > 0.0) ? (g_tk[ti].peakPts / g_tk[ti].initRiskPts) : 0.0;
       double c1 = ApplyInstantBreakEven(g_tk[ti], profitPts, profitMoney);
       if(c1 > best) { best = c1; src = "BE"; }
       double c2 = ProtectOpenStops(g_tk[ti]);
@@ -4619,7 +4728,7 @@ void ManageOpen()
          src = "LADDER T" + IntegerToString(g_tk[ti].tier);
         }
       // Structure trail after 1R / BE — trails behind price so winners stay locked
-      bool past1R = (g_tk[ti].initRiskPts > 0.0 && g_tk[ti].peakPts >= g_tk[ti].initRiskPts);
+      bool past1R = (g_tk[ti].initRiskPts > 0.0 && g_tk[ti].peakPts >= InpPeakLockMinR * g_tk[ti].initRiskPts);
       if(InpUseStructureTrail && (g_tk[ti].beDone || past1R))
         {
          if(!ratesLoaded) { n = LoadRates(g_tf, 40, r); ratesLoaded = true; }
@@ -4631,50 +4740,64 @@ void ManageOpen()
            }
          if(c3 > best) { best = c3; src = "TRAIL"; }
         }
-      // Never give back a locked BE/1R win: SL floor at entry, then peak locks trail higher
-      if(g_tk[ti].beDone || past1R)
+      // v1.15b: NEVER give back a win — BE floor + peak% lock (70%@1R, ladder handles 85%@2R)
+      if(g_tk[ti].beDone || past1R || src == "BE")
         {
-         double beFloor = dir * entry + g_prof.beBufferPts * _Point;
+         double bufPts = (double)g_prof.beBufferPts;
+         if(InpBEIncludeSpread)
+           {
+            double sprPts = (g_ask - g_bid) / _Point;
+            if(sprPts > bufPts) bufPts = sprPts;
+           }
+         double beFloor = dir * entry + bufPts * _Point;
          if(best < beFloor) { best = beFloor; if(StringLen(src) == 0) src = "BE-FLOOR"; }
          if(past1R && g_tk[ti].peakPts > 0.0)
            {
-            double lockHalf = dir * entry + g_tk[ti].peakPts * 0.50 * _Point;
-            if(lockHalf > best) { best = lockHalf; src = "PEAK50"; }
+            double keepPct = InpPeakLockPctAt1R;
+            if(keepPct < 70.0) keepPct = 70.0;
+            if(peakR >= InpTier2R && InpTier2Pct > keepPct) keepPct = InpTier2Pct;
+            if(peakR >= InpTier3R && InpTier3Pct > keepPct) keepPct = InpTier3Pct;
+            double lockPeak = dir * entry + g_tk[ti].peakPts * keepPct / 100.0 * _Point;
+            if(lockPeak > best) { best = lockPeak; src = StringFormat("PEAK%.0f", keepPct); }
            }
         }
 
-      double xMax = dir * ref - FloorDist();
+      // Max SL toward market = price − stop floor (never place inside freeze)
+      double spr = MathMax(0.0, g_ask - g_bid);
+      double xMax = dir * ref - MathMax(FloorDist(), InpBEIncludeSpread ? spr : 0.0);
       if(best > xMax) best = xMax;
 
       bool improve = false;
       double minStep = g_prof.trailStepPts * _Point;
-      if(src == "BE" || StringFind(src, "LADDER") == 0) minStep = _Point;
+      if(src == "BE" || StringFind(src, "LADDER") == 0 || StringFind(src, "PEAK") == 0 || src == "BE-FLOOR")
+         minStep = _Point;
       if(xCur <= NO_CAND / 2.0) improve = (best > NO_CAND / 2.0 && best < dir * ref);
       else improve = (best - xCur >= minStep);
       if(!improve) continue;
-      if(now - g_tk[ti].lastModifyTry < 2) continue;
+      // BE / peak-lock: allow every tick; other trails keep 1s throttle
+      int coolSec = (src == "BE" || StringFind(src, "PEAK") == 0 || StringFind(src, "LADDER") == 0) ? 0 : 1;
+      if(coolSec > 0 && now - g_tk[ti].lastModifyTry < coolSec) continue;
 
       double newSL = NormPrice(XReal(best, dir));
-      if(dir > 0 && newSL >= g_bid) continue;
-      if(dir < 0 && newSL <= g_ask) continue;
-      if(curSL > 0.0 && MathAbs(newSL - curSL) < minStep) continue;
-
       g_tk[ti].lastModifyTry = now;
       double oldSL = curSL;
-      if(ModifyPositionSL(ticket, newSL, curTP))
+      bool mustKeep = (g_tk[ti].beDone || past1R || src == "BE" || profitMoney > 0.0);
+      bool moved = ProtectMoveSL(ticket, dir, entry, oldSL, newSL, curTP, src,
+                                 profitPts, profitMoney, g_tk[ti].peakPts, mustKeep);
+      if(moved)
         {
          g_tk[ti].lastModifyTry = 0;
-         bool wasBE = g_tk[ti].beDone;
-         if(dir * (newSL - entry) >= 0.0) g_tk[ti].beDone = true;
-         if(src == "BE" || (!wasBE && g_tk[ti].beDone))
-            LogMsg(StringFormat("BE set #%I64u %.*f -> %.*f (profit %.0f pts / USD %.2f, peak %.0f)",
-                                ticket, g_digits, oldSL, g_digits, newSL, profitPts, profitMoney, g_tk[ti].peakPts), true);
-         else if(StringFind(src, "LADDER") == 0)
-            LogMsg(StringFormat("PEAK LOCK #%I64u %.*f -> %.*f (peak %.0f, keep tier %d)",
-                                ticket, g_digits, oldSL, g_digits, newSL, g_tk[ti].peakPts, g_tk[ti].tier), true);
+         // Re-read SL after successful modify / possible emergency close
+         if(PositionSelectByTicket(ticket))
+           {
+            double slNow = PositionGetDouble(POSITION_SL);
+            if(dir * (slNow - entry) >= 0.0) g_tk[ti].beDone = true;
+           }
          else
-            LogMsg(StringFormat("SL MOD %s #%I64u %.*f -> %.*f (profit %.0f pts, peak %.0f, tier %d)",
-                                src, ticket, g_digits, oldSL, g_digits, newSL, profitPts, g_tk[ti].peakPts, g_tk[ti].tier), true);
+           {
+            // closed by emergency
+            g_tk[ti].beDone = true;
+           }
         }
      }
   }
@@ -5448,7 +5571,7 @@ int OnInit()
    LogMsg(StringFormat("v%s dual-direction ON — each %s bar logs BUY+SELL per engine; FINAL flips on H1 CHoCH+M15; TradeDir=%s CT=%s",
                        EA_VER, TFStr(g_tf), EnumToString(InpTradeDirection),
                        CounterTrendPermitted() ? "ON" : "off"), true);
-   LogMsg(StringFormat("v1.15 CORE: chop/range HARD | cool %db/%dm | maxDay=%d | BE@%.2fR | expRR>=%.1f | flipImm=%s | MaxSL_USD=%.0f | MaxPos=%d",
+   LogMsg(StringFormat("v1.15b CORE: BE+peakLOCK+retry | chop HARD | cool %db/%dm | maxDay=%d | BE@%.2fR | expRR>=%.1f | flipImm=%s | MaxSL_USD=%.0f | MaxPos=%d",
                        InpCooldownBarsAfterLoss, InpCooldownAfterLossMin, InpMaxTradesPerDay,
                        InpBreakEvenR, InpMinExpectancyRR,
                        InpFlipEnterImmediate ? "ON" : "off",

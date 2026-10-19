@@ -1,0 +1,28 @@
+════════════════════════════════════════
+v1.12 — LIISKA ISBEDDELKA (hal bog)
+Abdihakiim Jamaal | 2026-10-19
+════════════════════════════════════════
+
+MAXAA KA BADALAY v1.11?
+1) Jihada: chart/M1 candle flow ayaa hogaamiya.
+   BUY = suuq UP | SELL = suuq DOWN.
+   HTF (H4/H1) ma iibinayo inta M1 dhacayo.
+
+2) Serial adds: isla jihada marka ticket hore
+   yahay BE+ ama ≥1.0R + pullback cusub.
+   Max 2. Drawdown-ka laguma darin.
+
+3) Instant reverse: flow markuu rogmo →
+   exit + opposite isla bar/tick.
+   Cooldown lama sugayo.
+
+4) IDLE-WATCHDOG: 20 bar flat + flow cad →
+   log "IDLE-WATCHDOG" + relax rule ugu liita.
+
+5) Weli jira: $5 SL cap | BE 1R | peak lock.
+
+CADDEYN BUY/SELL (synthetic; XAU tester ma jiro halkan):
+  BUY 6 | SELL 22 | trend-aligned 100%
+  (series la rogo → 22 BUY / 6 SELL — mirror OK)
+
+SAMEE: ka saar v111 → F7 v112 → AutoTrading ON.
